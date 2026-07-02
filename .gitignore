@@ -1,0 +1,9 @@
+bower_components
+node_modules
+*.log
+.DS_Store
+.env
+
+# Deno
+deno.lock
+output/

@@ -1,0 +1,18 @@
+{
+  "tasks": {
+    "render": "deno run --unstable-webgpu -A src/main.js",
+    "minify": "deno run --unstable-webgpu -A tools/minify.js",
+    "validate": "deno run --unstable-webgpu -A tools/validate.js"
+  },
+  "imports": {
+    "png-tools": "npm:png-tools@^1.0.4",
+    "opentype.js": "npm:opentype.js@1.3.5",
+    "@napi-rs/canvas": "npm:@napi-rs/canvas@^0.1.100"
+  },
+  "fmt": {
+    "lineWidth": 110,
+    "singleQuote": true,
+    "semiColons": true,
+    "proseWrap": "preserve"
+  }
+}

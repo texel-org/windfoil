@@ -1,0 +1,21 @@
+area-coverage-demo
+Copyright 2026 Matt DesLauriers
+
+This product includes software developed for the area-coverage algorithm demo,
+licensed under the Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------------
+Third-party assets
+--------------------------------------------------------------------------------
+
+This repository bundles the Lato typeface (assets/Lato-Regular.ttf), loaded at
+runtime by the demo:
+
+    Lato
+    Copyright (c) 2010-2015 by tyPoland Lukasz Dziedzic (team@latofonts.com),
+    with Reserved Font Name "Lato".
+    Licensed under the SIL Open Font License, Version 1.1 (see assets/OFL.txt).
+    https://openfontlicense.org
+
+To use a different font, point src/main.js (and tools/validate.js) at any other
+TrueType file.
