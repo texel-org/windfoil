@@ -21,6 +21,7 @@ deno task validate   # compare coverage vs a point-sampled box filter and Skia
 
 - [`docs/ALGORITHM.md`](docs/ALGORITHM.md) — the algorithm.
 - [`docs/COMPARISON.md`](docs/COMPARISON.md) — how it relates to other coverage methods.
+- [`docs/MINIFICATION.md`](docs/MINIFICATION.md) — why the gather gets costly when zoomed out, and how to bound it.
 - [`src/area.wgsl`](src/area.wgsl) — the shader: the winding-integral box filter + the row-band gather.
 - [`src/bands.js`](src/bands.js) — the row-band acceleration structure (see ALGORITHM §6).
 - [`src/font.js`](src/font.js) — glyph outlines + metrics from the bundled font (opentype.js, at runtime).
