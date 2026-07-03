@@ -143,7 +143,6 @@ function devicePos(e) {
 
 // ---------------------------------------------------------------------------------------------------
 // Input — pointer drag (1 finger = pan, 2 fingers = pinch-zoom + pan), wheel zoom about the cursor, and a
-// double-click / double-tap to snap back to the default view (there's no recenter button in the UI).
 // ---------------------------------------------------------------------------------------------------
 function installInput() {
   const pointers = new Map();
@@ -238,7 +237,6 @@ function installInput() {
     },
     { passive: false },
   );
-  canvas.addEventListener("dblclick", recenter); // no button — double-click to reset the view
 
   document.getElementById("hint").textContent = "pan & zoom around";
   globalThis.addEventListener("resize", resize);
@@ -327,7 +325,7 @@ async function main() {
     // same regardless of frame interval; below a hair of a pixel per frame we snap to rest.
     if (!dragging && (velX || velY) && dt > 0) {
       panBy(velX * dt, velY * dt);
-      const decay = Math.pow(0.82, dt / FRAME_MS);
+      const decay = Math.pow(0.8, dt / FRAME_MS);
       velX *= decay;
       velY *= decay;
       if (Math.abs(velX) < 0.002 && Math.abs(velY) < 0.002) velX = velY = 0;
