@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>area coverage — demo</title>
+    <!-- This repo is served whole on GitHub Pages; the interactive demo lives in /demo/. Send the bare
+         Pages URL there. Relative target keeps it correct under the project subpath. -->
+    <meta http-equiv="refresh" content="0; url=./demo/" />
+    <link rel="canonical" href="./demo/" />
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; color: #fff;
+        font: 14px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+      .box { position: fixed; inset: 0; display: grid; place-content: center; text-align: center; }
+      a { color: #4287f5; }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <p>Redirecting to the <a href="./demo/">area coverage demo</a>…</p>
+    </div>
+    <script>
+      // Belt-and-suspenders: redirect immediately if the meta refresh is ignored.
+      location.replace("./demo/");
+    </script>
+  </body>
+</html>
