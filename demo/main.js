@@ -5,10 +5,10 @@
 // type stays crisp at any zoom. There are so many lines because you can zoom so far out.
 //
 // It is DRY with the offscreen renderer: the atlas (bands.js), layout (layout.js/layoutStack), font parsing
-// (font.js) and the GPU pipeline + shader (gpu.js/area.wgsl) are all the shared src/*.js modules — this file
+// (font.js) and the GPU pipeline + shader (gpu.js/windfoil.wgsl) are all the shared src/*.js modules — this file
 // only adds the browser-specific parts (a camera, pointer/wheel input, a canvas swapchain, and the HUD).
 //
-// Serve from the repo ROOT (WebGPU needs a secure context — localhost counts) so /src/*.js, /src/area.wgsl and
+// Serve from the repo ROOT (WebGPU needs a secure context — localhost counts) so /src/*.js, /src/windfoil.wgsl and
 // /assets/*.ttf all resolve:  `deno task serve`  then open  http://localhost:8080/demo/
 
 import { parseFont } from "../src/font.js";
@@ -20,13 +20,14 @@ import {
   createGlyphRenderer,
 } from "../src/gpu.js";
 
-const INK = [0.2588, 0.5294, 0.9608, 1]; // #4287f5 blue ink
-const BG = [0, 0, 0, 1]; // black background (premultiplied at clear time)
+const INK = [12, 15, 28, 0xff].map((x) => x / 0xff); // near-black ink
+// const BG = [233, 227, 213, 0xff].map((x) => x / 0xff); // warm off-white
+const BG = [233, 227, 213, 0xff].map((x) => x / 0xff); // warm off-white
 
 // Zoom range, expressed as the user-facing "zoom level" (1× = one world unit per CSS px). The camera's device
 // scale is dpr × this, so the readout matches what the eye sees regardless of the display's pixel ratio.
 const MIN_ZOOM = 0.005;
-const MAX_ZOOM = 3000;
+const MAX_ZOOM = 100;
 
 // A size ladder over many lines, each bigger than the last. A plain geometric ramp spends equal lines per
 // octave, which leaves too many giant lines; skewing the normalized index by GROWTH_SKEW (>1) packs most of
@@ -114,8 +115,6 @@ function cameraUniform() {
 // Sizing — keep the backing store at device resolution; capped dpr keeps the fill-rate sane on retina.
 // ---------------------------------------------------------------------------------------------------
 let canvas;
-let viewMode = 0; // 0 = fill · 1 = analytic normal map (toggled with the 'n' key)
-const MODE_LABELS = ["fill", "analytic normals"];
 function resize() {
   dpr = Math.min(globalThis.devicePixelRatio || 1, 2);
   W = Math.max(1, Math.round(canvas.clientWidth * dpr));
@@ -182,21 +181,7 @@ function installInput() {
   );
   canvas.addEventListener("dblclick", recenter); // no button — double-click to reset the view
 
-  // 'n' toggles the analytic normal-map view; keep the hint discoverable.
-  const hintEl = document.getElementById("hint");
-  const setHint = () => {
-    hintEl.textContent =
-      viewMode === 0
-        ? "pan & zoom around — press N for normals"
-        : `${MODE_LABELS[viewMode]} — press N for glyphs`;
-  };
-  setHint();
-  globalThis.addEventListener("keydown", (e) => {
-    if (e.key === "n" || e.key === "N") {
-      viewMode = (viewMode + 1) % MODE_LABELS.length;
-      setHint();
-    }
-  });
+  document.getElementById("hint").textContent = "pan & zoom around";
   globalThis.addEventListener("resize", resize);
 }
 
@@ -274,7 +259,6 @@ async function main() {
       width: W,
       height: H,
       cam: cameraUniform(),
-      mode: viewMode,
     });
 
     const encoder = device.createCommandEncoder();

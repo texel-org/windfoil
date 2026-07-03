@@ -1,7 +1,6 @@
 {
   "tasks": {
     "render": "deno run --unstable-webgpu -A src/main.js",
-    "minify": "deno run --unstable-webgpu -A tools/minify.js",
     "validate": "deno run --unstable-webgpu -A tools/validate.js",
     "serve": "deno run -A jsr:@std/http@^1/file-server --port 8080 ."
   },

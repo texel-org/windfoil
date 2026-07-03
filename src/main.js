@@ -1,6 +1,6 @@
 // main.js — the demo entry point (`deno task render`).
 //
-// Renders the phrase "area coverage" at a ladder of geometrically increasing sizes, every glyph of every
+// Renders the phrase "The five boxing wizards jump quickly" at a ladder of geometrically increasing sizes, every glyph of every
 // row in one instanced draw, and writes an anti-aliased PNG. The sizes share one banded glyph atlas, so the
 // geometry is stored once however many times a letter repeats.
 
@@ -10,33 +10,33 @@ import { layoutStack } from "./layout.js";
 import { renderToRGBA } from "./gpu.js";
 import { encodePNG } from "./png.js";
 
-// --style <name>: an opt-in perceptual coverage curve (gamma = stem weight <1 bolder / >1 thinner; sharp =
-// edge contrast >1 crisper / <1 softer). "exact" is the default identity and writes the unsuffixed file;
-// every other style writes output/area-coverage-<style>.png.
-const STYLES = {
-  exact: [1.0, 1.0],
-  sharp: [1.15, 2.2],
-  crisp: [1.05, 1.6],
-  strong: [0.72, 1.1],
-  smooth: [1.0, 0.7],
-};
+// --gamma / --sharp: an opt-in perceptual coverage curve applied on top of the exact coverage (gamma = stem
+// weight, <1 bolder / >1 thinner; sharp = edge contrast about 0.5, >1 crisper / <1 softer). Both default to
+// 1.0 — the identity — so the plain render is the bit-for-bit exact box filter.
+//   e.g. `deno task render --gamma 0.72 --sharp 1.1`
 function argValue(name) {
   const i = Deno.args.indexOf(`--${name}`);
   if (i >= 0 && i + 1 < Deno.args.length) return Deno.args[i + 1];
   const eq = Deno.args.find((a) => a.startsWith(`--${name}=`));
   return eq ? eq.slice(name.length + 3) : null;
 }
-const styleName = argValue("style") ?? "exact";
-if (!(styleName in STYLES)) {
-  console.error(`unknown --style "${styleName}"; choose one of: ${Object.keys(STYLES).join(", ")}`);
-  Deno.exit(1);
+function argNumber(name, fallback) {
+  const raw = argValue(name);
+  if (raw === null) return fallback;
+  const v = Number(raw);
+  if (!Number.isFinite(v)) {
+    console.error(`--${name} must be a number, got "${raw}"`);
+    Deno.exit(1);
+  }
+  return v;
 }
-const style = STYLES[styleName];
-const suffix = styleName === "exact" ? "" : `-${styleName}`;
+const gamma = argNumber("gamma", 1.0);
+const sharp = argNumber("sharp", 1.0);
+const style = [gamma, sharp];
 
-const TEXT = "area coverage";
-const INK = [0.11, 0.11, 0.17, 1]; // near-black ink
-const BG = [0.96, 0.95, 0.92, 1]; // warm off-white
+const TEXT = "The five boxing wizards jump quickly";
+const INK = [12, 15, 28, 0xff].map((x) => x / 0xff); // near-black ink
+const BG = [233, 227, 213, 0xff].map((x) => x / 0xff); // warm off-white
 const MARGIN = 64;
 
 // The zoom ladder: STEPS sizes in geometric progression from MIN to MAX (a constant ratio between rows),
@@ -47,7 +47,10 @@ const MIN_SIZE = 20;
 const MAX_SIZE = 200;
 const TINY = [8, 13];
 const ratio = (MAX_SIZE / MIN_SIZE) ** (1 / (STEPS - 1));
-const sizes = [...TINY, ...Array.from({ length: STEPS }, (_, i) => MIN_SIZE * ratio ** i)];
+const sizes = [
+  ...TINY,
+  ...Array.from({ length: STEPS }, (_, i) => MIN_SIZE * ratio ** i),
+];
 
 const font = await loadFont(
   new URL("../assets/Lato-Regular.ttf", import.meta.url),
@@ -69,7 +72,7 @@ const instanceData = new Float32Array(instances);
 const instanceCount = instanceData.length / 16;
 
 console.log(
-  `Rendering "${TEXT}" [style: ${styleName}] at ${sizes.length} sizes (${sizes[0]}–${MAX_SIZE}px) → ${width}×${height}`,
+  `Rendering "${TEXT}" [gamma ${gamma}, sharp ${sharp}] at ${sizes.length} sizes (${sizes[0]}–${MAX_SIZE}px) → ${width}×${height}`,
 );
 const t0 = performance.now();
 const rgba = await renderToRGBA({
@@ -86,7 +89,7 @@ const t1 = performance.now();
 
 const png = encodePNG(rgba, width, height);
 await Deno.mkdir(new URL("../output/", import.meta.url), { recursive: true });
-const outPath = new URL(`../output/area-coverage${suffix}.png`, import.meta.url);
+const outPath = new URL(`../output/windfoil.png`, import.meta.url);
 await Deno.writeFile(outPath, png);
 
 console.log(

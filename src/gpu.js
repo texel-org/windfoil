@@ -1,10 +1,10 @@
-// gpu.js — WebGPU plumbing for the area-coverage shader, shared by the offscreen PNG renderer and the
+// gpu.js — WebGPU plumbing for the windfoil coverage shader, shared by the offscreen PNG renderer and the
 // realtime web client. The core is one instanced draw of the glyph atlas under a camera (`createGlyphRenderer`);
 // `renderToRGBA` wraps it for a one-shot offscreen render + readback, while the web client draws it into a
 // canvas swapchain every frame with a moving camera. Four bindings (uniforms, instances, curve atlas, row
 // table), so all glyphs of all sizes render in a single draw(4, instanceCount).
 
-const WGSL_URL = new URL('./area.wgsl', import.meta.url);
+const WGSL_URL = new URL('./windfoil.wgsl', import.meta.url);
 
 // Read the WGSL source in either environment: Deno reads it off disk, the browser fetches it (both resolve
 // relative to this module, so the client only needs to be served from the repo root).
@@ -48,8 +48,8 @@ function storage(device, floats) {
 export function createGlyphRenderer(device, { code, format, curves, rows, instances, instanceCount }) {
   const module = device.createShaderModule({ code });
 
-  // Uniforms: res (vec2) + style (gamma, sharp) + camera (scaleX, scaleY, transX, transY) + flags (vec4) = 12 floats.
-  const uniform = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  // Uniforms: res (vec2) + style (gamma, sharp) + camera (scaleX, scaleY, transX, transY) = 8 floats.
+  const uniform = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const curveBuf = storage(device, curves);
   const rowBuf = storage(device, rows);
   const instBuf = storage(device, instances);
@@ -86,14 +86,13 @@ export function createGlyphRenderer(device, { code, format, curves, rows, instan
 
   return {
     // Update the per-frame uniforms. `cam` is [scaleX, scaleY, transX, transY] (identity by default, so the
-    // offscreen path passes only width/height/style). `mode` is the fragment view: 0 = fill, 1 = analytic
-    // normal map (flags.x in the shader).
-    setUniforms({ width, height, style = [1, 1], cam = [1, 1, 0, 0], mode = 0 }) {
+    // offscreen path passes only width/height/style).
+    setUniforms({ width, height, style = [1, 1], cam = [1, 1, 0, 0] }) {
       device.queue.writeBuffer(
         uniform,
         0,
-        // res, style, cam, then flags (x = view mode; yzw reserved)
-        new Float32Array([width, height, style[0], style[1], cam[0], cam[1], cam[2], cam[3], mode, 0, 0, 0]),
+        // res, style, cam
+        new Float32Array([width, height, style[0], style[1], cam[0], cam[1], cam[2], cam[3]]),
       );
     },
     // Record the one instanced draw for every glyph into an open render pass.

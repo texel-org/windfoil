@@ -14,7 +14,7 @@ const TARGET_PER_BAND = 6; // aim for ~this many pieces per band (before y-overl
 const MAX_BANDS = 64;
 // Bands with MORE than this many pieces are x-sorted (by hull x-max, descending) so the shader can stop at the
 // first piece fully left of the pixel; shorter bands stay in curve order and take the plain linear scan.
-// MUST equal SORT_MIN in area.wgsl — the shader only breaks early on bands it assumes are sorted, so a mismatch
+// MUST equal SORT_MIN in windfoil.wgsl — the shader only breaks early on bands it assumes are sorted, so a mismatch
 // is either a correctness bug (breaks an unsorted band) or lost perf (never breaks a sorted one).
 // Tuning: measured over the Lato glyph set (a–z + ",."), post-duplication band occupancy is min 2 / median 8 /
 // avg 8.3 / max 21, clustered at 6–9. 8 sits at the median — small common bands stay on the cheap scan, and
