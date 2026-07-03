@@ -195,7 +195,7 @@ for (const [label, quads, evenodd] of SHAPES) {
 }
 console.log(
   `\nours vs box: mean ${(obMean / SHAPES.length).toFixed(5)}. Simple fills sit at the ${F}×${F} point-sample noise` +
-    `\n  (max ≲ 0.02); the larger star maxes are the fold-model limit at self-intersections (see COMPARISON.md).` +
+    `\n  (max ≲ 0.02); the larger star maxes are the fold-model limit at self-intersections (see docs/ALGORITHM.md §8).` +
     `\nskia vs box: mean ${(sbMean / SHAPES.length).toFixed(5)}, max ${sbMax.toFixed(3)} — Skia's AA is its own model, not the exact filter.` +
     `\nThe box filter is point-sampled from the raw curves, independent of our shader (no self-comparison).`,
 );

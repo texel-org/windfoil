@@ -12,7 +12,7 @@ derived below.
 
 ---
 
-## 1. What we want
+## 1. Goal
 
 A shape is directed contours plus a fill rule. Its **winding number** `w(x, y)` counts the signed ray
 crossings from `(x, y)`; the fill is `{ w ≠ 0 }` (nonzero) or `{ w odd }` (even-odd). The ideal antialiased
@@ -34,7 +34,7 @@ then a fold from `F` to `[0,1]` coverage (§4).
 
 ---
 
-## 2. The master formula
+## 2. Formula
 
 Green's theorem (`∫∫_R dA = ∮_∂R x dy`) turns the area integral of the winding number into boundary integrals,
 one per curve. Clipping to `B` and folding the box-edge terms into a clamp gives an exact decomposition over
@@ -114,7 +114,7 @@ Normalize `F = (Σ_e A_e) / (sx·sy)`, the pixel-averaged winding number, and fo
 For a pixel spanning two adjacent winding levels (ordinary edge pixels) this is the exact box-filtered
 coverage. For a pixel with opposite-sign winding cancellation or three or more winding levels at once, the fold
 is a saturating-area approximation — the same coverage model production signed-area renderers use (Skia,
-Vello; see [`COMPARISON.md`](COMPARISON.md)). So the integral is exact for the averaged winding number; the
+Vello; see §8). So the integral is exact for the averaged winding number; the
 fold is exact only under the usual local-winding assumptions.
 
 ---
@@ -170,20 +170,63 @@ One precision detail: the fragment builds its slab **rc-relative** (`[−sy/2, +
 absolute space. As you zoom in `sy` shrinks as `~1/zoom`; once `sy/2` drops below one ULP of the coordinate an
 absolute slab quantizes to zero height and whole pixel rows integrate nothing. Rc-relative keeps the slab
 stable at any zoom and distance from the origin, so interiors stay solid; the residual limit is AA _edges_
-wobbling by ~`ULP(coordinate)·zoom` from the `curve − rc` evaluation (see [COMPARISON.md](COMPARISON.md)).
+wobbling by ~`ULP(coordinate)·zoom` from the `curve − rc` evaluation (see §8).
 
 ---
 
 ## 7. Map to the code
 
-| concept                                                               | where                                                       |
-| --------------------------------------------------------------------- | ----------------------------------------------------------- |
-| split curves into xy-monotone pieces                                  | [`src/geometry.js`](../src/geometry.js)                     |
-| file pieces into row bands, build the deduped atlas (§6)              | [`src/bands.js`](../src/bands.js)                           |
-| `mono_root` — single-branch monotone quadratic solve                  | [`src/windfoil.wgsl`](../src/windfoil.wgsl)                         |
-| `integrate_inside` — exact midpoint rule for the INSIDE zone               | `src/windfoil.wgsl`                                             |
-| `integrate_piece` — the LEFT / INSIDE / RIGHT zone split                   | `src/windfoil.wgsl`                                             |
+| concept                                                                   | where                                                           |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| split curves into xy-monotone pieces                                      | [`src/geometry.js`](../src/geometry.js)                         |
+| file pieces into row bands, build the deduped atlas (§6)                  | [`src/bands.js`](../src/bands.js)                               |
+| `mono_root` — single-branch monotone quadratic solve                      | [`src/windfoil.wgsl`](../src/windfoil.wgsl)                     |
+| `integrate_inside` — exact midpoint rule for the INSIDE zone              | `src/windfoil.wgsl`                                             |
+| `integrate_piece` — the LEFT / INSIDE / RIGHT zone split                  | `src/windfoil.wgsl`                                             |
 | `integrate_band` — sum `A_e` over one band's pieces, with the early break | `src/windfoil.wgsl`                                             |
-| `integrate_face` — select + read the row bands a pixel touches (§6)     | `src/windfoil.wgsl`                                             |
-| `fs` — normalize `F` and fold (nonzero / even-odd)                    | `src/windfoil.wgsl`                                             |
-| instanced quad + per-glyph band table                                 | `src/windfoil.wgsl` (`vs`), [`src/layout.js`](../src/layout.js) |
+| `integrate_face` — select + read the row bands a pixel touches (§6)       | `src/windfoil.wgsl`                                             |
+| `fs` — normalize `F` and fold (nonzero / even-odd)                        | `src/windfoil.wgsl`                                             |
+| instanced quad + per-glyph band table                                     | `src/windfoil.wgsl` (`vs`), [`src/layout.js`](../src/layout.js) |
+
+---
+
+## 8. How it compares
+
+It targets the **exact box filter** of accumulation rasterizers (font-rs, Pathfinder, Vello) with the execution
+model of the analytic per-fragment ones (Slug, Loop–Blinn): a per-pixel **gather** — no accumulation buffer,
+prefix sum, or per-frame flatten — analytic at any zoom. Slug approximates the box filter with an edge blend;
+atlas/SDF methods bake it at a fixed resolution; supersampling reaches it only in the limit.
+
+Honest weaknesses:
+
+- **Winding fold** is exact only where a pixel spans ≤ 2 adjacent winding levels; self-intersections and extreme
+  minification deviate (Skia and Vello make the same trade — §4).
+- **Rotated / sheared transforms** integrate over the pixel's local preimage, not the device pixel — shared by
+  every local-space analytic method.
+- **Deep-zoom float precision** wobbles AA edge positions far from the origin; interiors stay solid. Fix with de
+  Casteljau localization or `f64`.
+- **Per-pixel cost** — a curve-crossed pixel does a few `sqrt`s vs one or two for ramp methods; more arithmetic
+  than a heuristic, by design.
+- **Minification** — zoomed out, a footprint spans whole row bands so every curve integrates per pixel, costlier
+  than Slug's dual-ray. This repo guards with a cheap sub-pixel approximation; a proper fix is per-band moments
+  at +2 floats/band ([`NOTES.md`](NOTES.md) → Band Moments), if minification matters.
+
+---
+
+## 9. Prior Art
+
+This builds particularly on [the Slug Algorithm](https://terathon.com/blog/decade-slug.html) — the dual-ray analytic gather it grew out of — but draws on a lot of
+existing work and may well overlap ideas we haven't traced. A rough, non-exhaustive list of what feels related
+(see the README for links and more context):
+
+- **Green's-theorem / signed-area rasterizers** — font-rs (Levien), Pathfinder, Vello. Same `∮ x dy` per-edge
+  decomposition, but as a scatter + prefix-sum accumulation pass rather than a gather.
+- **Analytic per-fragment coverage** — Slug (Lengyel, dual-ray), Loop–Blinn (implicit quadratics). The gather
+  execution model, without the closed-form box filter.
+- **Exact polygonal filtering** — Jonathan Olson's Alpenglow: Green's-theorem closed-form box / tent /
+  Mitchell–Netravali filtering, for polygons (see the [`NOTES.md`](NOTES.md) Filter Kernels note).
+- **Per-cell / random-access schemes** — Nehab–Hoppe (RAVG), Ganacim et al. Relevant to the banding (§6) and
+  backdrop ideas.
+- **Classic area sampling** — Catmull (1978), Duff — exact coverage by integrating the filter over the shape.
+- **Atlas / distance-field text** — Valve SDF (Green), msdfgen (Chlumský), Wallace's outline gather — the baked
+  alternatives §8 contrasts against.

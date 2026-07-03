@@ -1,4 +1,4 @@
-# Windfoil
+# windfoil
 
 <img src="./assets/windfoil.png" width="50%" alt="text rendering demo" />
 
@@ -31,9 +31,8 @@ Note: this repo refers to "Skia" but is actually using [`@napi-rs/canvas`](https
 
 This README was written by me, but most of the code and other documentation in the repo was produced by agents at my direction.
 
-- [`docs/ALGORITHM.md`](docs/ALGORITHM.md) — the algorithm.
-- [`docs/COMPARISON.md`](docs/COMPARISON.md) — how it relates to other coverage methods.
-- [`docs/NOTES.md`](docs/NOTES.md) — some additional properties of the algorithm I've found interesting for my own uses
+- [`docs/ALGORITHM.md`](docs/ALGORITHM.md) — the algorithm
+- [`docs/NOTES.md`](docs/NOTES.md) — some additional properties of the algorithm I've found interesting for my own uses.
 - [`src/windfoil.wgsl`](src/windfoil.wgsl) — the shader: the winding-integral box filter + the row-band gather.
 - [`src/bands.js`](src/bands.js) — the row-band acceleration structure
 - [`src/font.js`](src/font.js) — glyph outlines + metrics from the bundled font (using opentype.js).
@@ -45,10 +44,10 @@ To provide a little context, I have been working for some weeks now on a 2D vect
 I tasked Fable with solving some problems I was encountering, and it was able to work within the large codebase I had been developing (I had a number of profilers, fuzzers and harnesses already in place across Rust/WASM, JS, Figma's renderer, and Skia via `@napi-rs/canvas`). Some notes & findings:
 
 - Slug uses a dual-ray approach, splitting shapes into horizontal and vertical bands (each pixel walks two bands), and in some complex scenes I was finding performance bottlenecks in shader reads and storage. The single-ray winding integral approach brought the bands buffer from ~1.54 MB to ~0.84 MB in the [tiger test SVG](https://commons.wikimedia.org/wiki/File:Ghostscript_Tiger.svg) and per-frame time did not regress, but improved in most scenes I tested.
-- Broadly, Slug's AA assumes ~one edge per pixel, so self overlapping strokes would sometimes render with degraded AA. To correct this, I had a CPU sweep union prepass to ensure each fragment received a single edge. Whereas Windfoil's integral handles overlap for free, so I was able to remove most of the CPU processing and just operate on the curves directly. This was a huge performance win for some generative art scenes with hundreds of thousands of complex and overlapping strokes, and also meant that more of my shapes became naturally scale invariant (as the CPU preprocessing was flattening curves at a device scale).
-- Both Slug and Skia's anti-aliasing could be described as approximations of the box filter, but Windfoil computes it (nearly) exactly in all cases I tested and care about. It was 4.2x closer to box filter against a 16x supersampled ground truth, and across a ~1000 shape corpus it was ~13% closer to Skia than Slug (Δ 0.164/255 for Windfoil vs 0.189 for Slug, and every outlier improved). It tied Slug only on the pathological pixels containing three-plus overlapping winding levels, which as far as I understand no single-sample approach can handle.
+- Broadly, Slug's AA assumes ~one edge per pixel, so self overlapping strokes would sometimes render with degraded AA. To correct this, I had a CPU sweep union prepass to ensure each fragment received a single edge. Whereas windfoil's integral handles overlap for free, so I was able to remove most of the CPU processing and just operate on the curves directly. This was a huge performance win for some generative art scenes with hundreds of thousands of complex and overlapping strokes, and also meant that more of my shapes became naturally scale invariant (as the CPU preprocessing was flattening curves at a device scale).
+- Both Slug and Skia's anti-aliasing could be described as approximations of the box filter, but windfoil computes it (nearly) exactly in all cases I tested and care about. It was 4.2x closer to box filter against a 16x supersampled ground truth, and across a ~1000 shape corpus it was ~13% closer to Skia than Slug (Δ 0.164/255 for windfoil vs 0.189 for Slug, and every outlier improved). It tied Slug only on the pathological pixels containing three-plus overlapping winding levels, which as far as I understand no single-sample approach can handle.
 - I was struggling to get a per-cell "backdrop" across shapes, to further optimise complex scenes. With this algorithm, it was made much simpler, and I can precompute an exact integer winding of everything outside of a cell (the 'backdrop').
-- Windfoil also opens some other interesting new avenues for my renderer that were not easy with Slug, such as plugging in new AA kernels (e.g. tent, Mitchell–Netravali) and computing curve normals, see [`docs/NOTES.md`](./docs/NOTES.md)
+- This algorithm also opens some other interesting new avenues for my renderer that were not easy with Slug, such as plugging in new AA kernels (e.g. tent, Mitchell–Netravali) and computing curve normals, see [`docs/NOTES.md`](./docs/NOTES.md)
 
 ## AI Usage
 
