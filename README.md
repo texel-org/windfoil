@@ -1,6 +1,6 @@
 # windfoil
 
-<img src="./assets/windfoil.png" width="50%" alt="text rendering demo" />
+<img src="./assets/windfoil.png" width="100%" alt="text rendering demo" />
 
 Code and demos for _windfoil_, a method for filling 2D vector shapes built from quadratic-Bézier contours, by computing winding and analytic anti-aliasing per-pixel in a fragment shader. The algorithm was designed to improve upon the public [Slug Algorithm](https://terathon.com/blog/decade-slug.html) for certain uses cases.
 
