@@ -153,25 +153,32 @@ Coarser bands cost windfoil almost nothing per extra piece (early-break + clamp/
 while a footprint spans fewer of them — measured **~8–19% faster at small/medium sizes** with no large-size
 regression and a ~15% smaller atlas, coverage bit-identical (`deno task validate` unchanged). It's
 windfoil-specific, so the benchmark pins Slug's own bands at 6 (via `bandPieces`'s new optional argument) to keep
-the comparison fair. Also rejected: a straight-piece fast path (`mono_root` already skips the `sqrt` for lines,
-so the ceiling is tiny and GPU divergence would eat it).
+the comparison fair. Also rejected: a straight-piece fast path (`mono_root` already skips the `sqrt` for lines).
 
-## windfoil+ : moments + backdrop acceleration (`windfoil-accel.wgsl`)
+## Rejected: band-moments acceleration (two attempts, both net-negative)
 
-The `docs/NOTES.md` "Band Moments" and "Backdrop" ideas, fused into one **2D-cell** structure (kept in bench/ so
-`src/windfoil.wgsl` stays the thin reference). For a band wholly inside the pixel's y-slab, its curves are split
-into a fixed grid of vertical cells; per cell a fragment classifies vs its pixel box — **fully inside → the
-moment `S+(xref−rc.x+hx)·D`** (O(1)), **fully right → the backdrop `sx·D`** (O(1)), fully left → 0, and only the
-≤2 straddle cells integrate. Shown as a third column (`windfoil+`); `--check` confirms it is **bit-identical**
-to windfoil (|Δrgb| 0.00000).
+`docs/NOTES.md` proposes accelerating minified windfoil with **Band Moments** (a band wholly inside the pixel's
+y-slab, x-contained by the box, contributes the closed form `S + (xref−rc.x+hx)·D`) and a **Backdrop** (fold
+far-right winding into a constant). I built both — the math is correct and **bit-exact** (`--check` |Δrgb|
+0.00000) — but both were **net-negative on real content and reverted:**
 
-Honest result on these scenes: it's a **specialized** win, not a free one.
-- **Wins ~1.6× at deep minification of dense art** (the complex shape at 2px: windfoil 1254 ms/frame → 797 ms) —
-  windfoil's single worst regime, where the y-slab covers whole bands so many cells collapse to O(1).
-- **Neutral-to-slightly-slower elsewhere** (~5–20%): text bands are too sparse to amortize the cell sweep (gated
-  back to the plain gather), and the larger shader lowers occupancy even on the plain path. The win is also
-  narrow because wide curves (e.g. ellipse arcs spanning the shape) x-split into many sub-pieces, so the ≤2
-  straddle cells stay expensive; only the *interior* cells fully collapse.
+1. **2D-cell fusion** (cells + moments + backdrop, commit `e259b59`): only ~1.6× at deep minification of dense
+   art (the shape at 2px), and ~5–20% *slower* everywhere else. Wide curves x-split into many straddle
+   sub-pieces, so only interior cells collapse to O(1).
+2. **Analytic y-prefix-sum of moments** (interior bands collapse to one prefix subtraction, instance-gated so the
+   average case skips it): **worse** — ~3.8× *slower* at 2px and still ~19% slower at 256px.
 
-So the moment/backdrop math works and is exact, but for this content the payoff is confined to heavily-minified
-dense vector art. It's gated (dense band + interior + box spanning ≥3 cells) so it only engages where it wins.
+The root cause is the GPU execution model, not the math:
+- **Shader bloat** — adding the moment path lowers occupancy of the whole shader, so the *plain* path pays ~15–20%
+  even when the fast path is never taken (measured at magnified sizes where the gate is off).
+- **Branch divergence** — the moment can only be *exact* where the box x-contains the glyph, a per-fragment
+  condition. At the small sizes where it fires, a warp spans many tiny glyphs (narrow ⇒ moment, wide ⇒ plain) and
+  center-vs-edge pixels, so warps run **both** paths. Divergence rises as glyphs shrink — exactly the regime the
+  moment targets — which is why the y-prefix gets *worse* toward 2px.
+
+Conclusion: an exact per-fragment moment cannot beat windfoil's plain gather inside one shader — the bloat +
+divergence swamp the O(1) win. The only acceleration that would sidestep both is a **separate, cheaper shader**
+selected per instance/zoom — i.e. a prefiltered coverage **mip** sampled below a crossover size (O(1), no
+divergence, box-filtered = windfoil's own target). That trades away windfoil's atlas-free identity, so it's a
+product decision, not a free win. Absent that, **minification is windfoil's inherent weak flank** (it wins
+magnification, memory, and exact quality); the `TARGET_PER_BAND` tune above is the analytic ceiling that helped.

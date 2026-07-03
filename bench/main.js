@@ -29,7 +29,6 @@ import { buildSlugAtlas, loadSlugShaderCode } from './slug.js';
 import { buildScene, SCENE_TEXT, INK } from './scene.js';
 import { buildShapeScene } from './shape.js';
 import { buildTigerScene } from './tiger.js';
-import { buildAccel, createAccelRenderer, loadAccelShaderCode } from './windfoil-accel.js';
 
 // ── args ──────────────────────────────────────────────────────────────────────────────────────────────
 function argValue(name) {
@@ -89,7 +88,7 @@ const target = device.createTexture({
   usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
 });
 const view = target.createView();
-const [wCode, sCode, aCode] = await Promise.all([loadShaderCode(), loadSlugShaderCode(), loadAccelShaderCode()]);
+const [wCode, sCode] = await Promise.all([loadShaderCode(), loadSlugShaderCode()]);
 
 function passDesc() {
   return {
@@ -137,11 +136,8 @@ async function measure(renderer, cam) {
 // `scene` is the normalized shape both builders return: { wCurves, wRows, sCurves, sRows, wInstances,
 // sInstances, count, center, worldSpan, statsLine, checkEmPx, fillRule }.
 async function runLadder(title, scene, levels) {
-  // windfoil+ reuses windfoil's exact curves/rows/instances, adding the 2D-cell moment/backdrop buffers.
-  const accel = buildAccel(scene.wCurves, scene.wRows, scene.wInstances);
   const ALGOS = [
     { name: 'windfoil', code: wCode, curves: scene.wCurves, rows: scene.wRows, instances: scene.wInstances, floats: 16 },
-    { name: 'windfoil+', code: aCode, curves: scene.wCurves, rows: scene.wRows, instances: scene.wInstances, floats: 16, accel },
     { name: 'slug', code: sCode, curves: scene.sCurves, rows: scene.sRows, instances: scene.sInstances, floats: 20 },
   ];
   const camForEmPx = (emPx) => {
@@ -172,10 +168,9 @@ async function runLadder(title, scene, levels) {
     const f = algo.floats;
     const sub = new Float32Array(idx.length * f);
     for (let k = 0; k < idx.length; k++) sub.set(algo.instances.subarray(idx[k] * f, idx[k] * f + f), k * f);
-    const o = { code: algo.code, format, curves: algo.curves, rows: algo.rows, instances: sub, instanceCount: idx.length };
-    return algo.accel
-      ? createAccelRenderer(device, { ...o, cellData: algo.accel.cellData, cellCurves: algo.accel.cellCurves })
-      : createGlyphRenderer(device, o);
+    return createGlyphRenderer(device, {
+      code: algo.code, format, curves: algo.curves, rows: algo.rows, instances: sub, instanceCount: idx.length,
+    });
   };
 
   console.log(`\n════════ ${title} ════════`);
@@ -192,7 +187,6 @@ async function runLadder(title, scene, levels) {
       const idx = visibleIndices(emPx);
       const px = String(emPx).padStart(5, '0'); // zero-pad so files sort by zoom
       for (const algo of ALGOS) {
-        if (algo.accel) continue; // windfoil+ renders identically to windfoil — no separate image
         const rgba = await readback(makeRenderer(algo, idx), cam);
         await Deno.writeFile(new URL(`${tag}_${px}px_${algo.name}.png`, dir), encodePNG(rgba, W, H));
       }
@@ -203,7 +197,7 @@ async function runLadder(title, scene, levels) {
 
   console.log('');
   console.log(
-    `${'px'.padStart(6)}  ${'zoom'.padStart(5)}  ${'windfoil'.padStart(9)}  ${'windfoil+'.padStart(9)}  ${'slug'.padStart(9)}   ${'accel'.padStart(6)}`,
+    `${'px'.padStart(6)}  ${'zoom'.padStart(6)}  ${'on-screen'.padStart(9)}  ${'windfoil'.padStart(10)}  ${'slug'.padStart(10)}   faster`,
   );
   const fmt = (ms) => (ms >= 10 ? ms.toFixed(2) : ms.toFixed(4));
   const rows = [];
@@ -211,23 +205,15 @@ async function runLadder(title, scene, levels) {
     const cam = camForEmPx(emPx);
     const idx = visibleIndices(emPx);
     const w = await measure(makeRenderer(ALGOS[0], idx), cam);
-    const a = await measure(makeRenderer(ALGOS[1], idx), cam); // windfoil+
-    const s = await measure(makeRenderer(ALGOS[2], idx), cam);
+    const s = await measure(makeRenderer(ALGOS[1], idx), cam);
     const zoom = emPx / REF_PX;
-    const accel = w.perFrame / a.perFrame; // >1 → moments help
-    rows.push({ emPx, zoom, visible: idx.length, w, a, s });
+    const faster = w.perFrame < s.perFrame
+      ? `windfoil ${(s.perFrame / w.perFrame).toFixed(2)}×`
+      : `slug ${(w.perFrame / s.perFrame).toFixed(2)}×`;
+    rows.push({ emPx, zoom, visible: idx.length, w, s, faster });
     console.log(
-      `${String(emPx).padStart(6)}  ${(zoom < 1 ? zoom.toFixed(2) : zoom.toFixed(1)).padStart(4)}×  ` +
-        `${fmt(w.perFrame).padStart(8)}m  ${fmt(a.perFrame).padStart(8)}m  ${fmt(s.perFrame).padStart(8)}m   ${accel >= 1.01 ? `${accel.toFixed(2)}×` : '  —  '}`,
-    );
-  }
-
-  // Band-moments takeaway: where windfoil+ beats plain windfoil.
-  const best = rows.reduce((x, r) => (!x || r.w.perFrame / r.a.perFrame > x.w.perFrame / x.a.perFrame ? r : x), null);
-  if (best && best.w.perFrame / best.a.perFrame >= 1.03) {
-    console.log(
-      `\n  band moments: windfoil+ up to ${(best.w.perFrame / best.a.perFrame).toFixed(2)}× faster than windfoil ` +
-        `(at ${best.emPx}px) — interior bands wholly inside the x-contained footprint go O(1).`,
+      `${String(emPx).padStart(6)}  ${(zoom < 1 ? zoom.toFixed(2) : zoom.toFixed(1)).padStart(5)}×  ` +
+        `${idx.length.toLocaleString().padStart(9)}  ${fmt(w.perFrame).padStart(9)}m  ${fmt(s.perFrame).padStart(9)}m   ${faster}`,
     );
   }
 
@@ -279,31 +265,27 @@ async function readback(renderer, cam) {
   return rgba;
 }
 
-// Mean |Δrgb| between two RGBA buffers over all pixels.
-function meanRgbDiff(a, b) {
-  let sum = 0;
-  for (let i = 0; i < W * H; i++) {
-    const o = i * 4;
-    sum += Math.abs(a[o] - b[o]) + Math.abs(a[o + 1] - b[o + 1]) + Math.abs(a[o + 2] - b[o + 2]);
-  }
-  return sum / (W * H * 3) / 255;
-}
-
 async function check(scene, ALGOS, makeRenderer, camForEmPx, visibleIndices, title) {
   const emPx = CHECK_PX || scene.checkEmPx;
   const cam = camForEmPx(emPx);
   const idx = visibleIndices(emPx);
-  const byName = (n) => ALGOS.find((a) => a.name === n);
-  const wRGBA = await readback(makeRenderer(byName('windfoil'), idx), cam);
-  const aRGBA = await readback(makeRenderer(byName('windfoil+'), idx), cam);
-  const sRGBA = await readback(makeRenderer(byName('slug'), idx), cam);
+  const wRGBA = await readback(makeRenderer(ALGOS[0], idx), cam);
+  const sRGBA = await readback(makeRenderer(ALGOS[1], idx), cam);
+  const bgR = Math.round(BG[0] * 255);
+  let sum = 0, wInk = 0, sInk = 0;
+  for (let i = 0; i < W * H; i++) {
+    sum += Math.abs(wRGBA[i * 4] - sRGBA[i * 4]) + Math.abs(wRGBA[i * 4 + 1] - sRGBA[i * 4 + 1]) + Math.abs(wRGBA[i * 4 + 2] - sRGBA[i * 4 + 2]);
+    if (wRGBA[i * 4] < bgR - 8) wInk++;
+    if (sRGBA[i * 4] < bgR - 8) sInk++;
+  }
+  const meanDiff = sum / (W * H * 3) / 255;
   const tag = sceneTag(title);
   await Deno.mkdir(new URL('../output/bench/', import.meta.url), { recursive: true });
   await Deno.writeFile(new URL(`../output/bench/${tag}_windfoil.png`, import.meta.url), encodePNG(wRGBA, W, H));
   await Deno.writeFile(new URL(`../output/bench/${tag}_slug.png`, import.meta.url), encodePNG(sRGBA, W, H));
   console.log(
-    `  check @ ${emPx}px:  windfoil+ vs windfoil |Δrgb| ${meanRgbDiff(aRGBA, wRGBA).toFixed(5)} (should be ~0 — moments are exact)` +
-      ` · windfoil vs slug |Δrgb| ${meanRgbDiff(wRGBA, sRGBA).toFixed(4)}`,
+    `  check @ ${emPx}px:  windfoil inked ${(100 * wInk / (W * H)).toFixed(1)}% · slug inked ${(100 * sInk / (W * H)).toFixed(1)}%` +
+      ` · mean |Δrgb| ${meanDiff.toFixed(4)}  → output/bench/${tag}_{windfoil,slug}.png`,
   );
 }
 
