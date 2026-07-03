@@ -10,7 +10,7 @@ Code and demos for _windfoil_, a method for filling 2D vector shapes built from 
 
 You can see a demo of this here:
 
-https://texel-org.github.io/area-algorithm-demo/demo/
+https://texel-org.github.io/windfoil/
 
 ## Running Locally
 
