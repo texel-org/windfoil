@@ -73,6 +73,13 @@
         right: var(--pad-h);
         bottom: var(--pad-v);
       }
+      /* On a narrow screen (phones), give the bottom-left tagline a tighter column so it wraps to a few
+         lines instead of running most of the viewport width (and crowding the bottom-right hint). Same font. */
+      @media (max-width: 640px) {
+        #tagline {
+          max-width: 45vw;
+        }
+      }
       /* Fallback: a simple red message centered on the page if WebGPU isn't available. */
       #error {
         left: 50%;

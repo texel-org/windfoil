@@ -76,6 +76,13 @@ let W = 1; // canvas backing-store px
 let H = 1;
 let contentBounds = { minX: 0, minY: 0, maxX: 1, maxY: 1 };
 
+// Kinetic panning — a flick keeps gliding and eases to a stop, for a native feel (velX/velY are device px per
+// ms, sampled from the drag). `dragging` suspends the glide while a finger/mouse is down. The glide itself is
+// applied once per frame in the rAF loop; a new touch cancels it (tap-to-stop).
+let velX = 0;
+let velY = 0;
+let dragging = false;
+
 const zoomLevel = () => cam.z / dpr; // world-units-per-CSS-px → the number shown in the HUD
 function clampZoom(z) {
   return Math.max(MIN_ZOOM * dpr, Math.min(MAX_ZOOM * dpr, z));
@@ -98,6 +105,7 @@ function zoomAt(sx, sy, factor) {
 // fill the height, then pin the content's bottom-left near the screen's bottom-left so you read into the run.
 const ROWS_TO_SHOW = 10; // how many of the biggest rows fill the viewport height (smaller = more zoomed in)
 function recenter() {
+  velX = velY = 0; // stop any glide when snapping back to the default view
   const rowH = 1.18 * MAX_SIZE; // world-px a biggest row occupies (inkAbove+inkBelow+gap; see layoutStack)
   cam.z = clampZoom(H / (ROWS_TO_SHOW * rowH));
   const pad = 24 * dpr; // small inset from the screen edges (device px)
@@ -140,11 +148,16 @@ function devicePos(e) {
 function installInput() {
   const pointers = new Map();
   let pinchPrev = null;
+  let nativeGesture = false; // a WebKit gesture* pinch is driving (Safari iOS/macOS) — mute the pointer fallback
+  let lastMoveT = 0; // performance.now() of the previous pan sample, used for the release (fling) velocity
 
   canvas.addEventListener("pointerdown", (e) => {
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, devicePos(e));
     pinchPrev = null;
+    dragging = true;
+    velX = velY = 0; // a new touch stops any ongoing glide (tap-to-stop, like native scroll views)
+    lastMoveT = performance.now();
   });
   canvas.addEventListener("pointermove", (e) => {
     if (!pointers.has(e.pointerId)) return;
@@ -152,8 +165,20 @@ function installInput() {
     const prev = pointers.get(e.pointerId);
     pointers.set(e.pointerId, p);
     if (pointers.size === 1) {
-      panBy(p.x - prev.x, p.y - prev.y);
-    } else if (pointers.size === 2) {
+      const dx = p.x - prev.x;
+      const dy = p.y - prev.y;
+      panBy(dx, dy);
+      // Track a smoothed pointer velocity (device px per ms) so a flick keeps gliding after release.
+      const t = performance.now();
+      const dt = t - lastMoveT;
+      if (dt > 0) {
+        velX = velX ? velX * 0.7 + (dx / dt) * 0.3 : dx / dt;
+        velY = velY ? velY * 0.7 + (dy / dt) * 0.3 : dy / dt;
+        lastMoveT = t;
+      }
+    } else if (pointers.size === 2 && !nativeGesture) {
+      // Fallback pinch, reconstructed from two pointers — for browsers without gesture* events (Chrome/
+      // Firefox, Android). On Safari the native handlers below take over via the nativeGesture gate.
       const [a, b] = [...pointers.values()];
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
       const dist = Math.hypot(a.x - b.x, a.y - b.y);
@@ -167,9 +192,43 @@ function installInput() {
   const release = (e) => {
     pointers.delete(e.pointerId);
     pinchPrev = null;
+    if (pointers.size === 0) {
+      dragging = false;
+      // Released after a pause (finger held still) → no fling, so it stops where you left it.
+      if (performance.now() - lastMoveT > 80) velX = velY = 0;
+    }
   };
   canvas.addEventListener("pointerup", release);
   canvas.addEventListener("pointercancel", release);
+
+  // Native pinch-zoom via WebKit gesture events (Safari on iOS + the macOS trackpad). They hand us a
+  // cumulative `scale` and the gesture centroid, so pinch-zoom and its pan track the OS's own gesture — much
+  // smoother than reconstructing it from two pointers. Where they fire they win (nativeGesture gate);
+  // elsewhere the pointer pinch above is the fallback. Desktop scroll-to-zoom (the wheel handler) is untouched.
+  let gPrev = null;
+  canvas.addEventListener("gesturestart", (e) => {
+    e.preventDefault();
+    nativeGesture = true;
+    pinchPrev = null;
+    velX = velY = 0;
+    const p = devicePos(e);
+    gPrev = { scale: e.scale || 1, x: p.x, y: p.y };
+  });
+  canvas.addEventListener("gesturechange", (e) => {
+    e.preventDefault();
+    if (!gPrev) return;
+    const p = devicePos(e);
+    panBy(p.x - gPrev.x, p.y - gPrev.y); // follow the centroid (on iOS it moves; on a Mac trackpad it ~holds)
+    if (gPrev.scale > 0) zoomAt(p.x, p.y, e.scale / gPrev.scale);
+    gPrev = { scale: e.scale, x: p.x, y: p.y };
+  });
+  const gestureEnd = (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    nativeGesture = false;
+    gPrev = null;
+  };
+  canvas.addEventListener("gestureend", gestureEnd);
+
   canvas.addEventListener(
     "wheel",
     (e) => {
@@ -243,17 +302,36 @@ async function main() {
   installInput();
 
   const [br, bg, bb, ba] = BG;
+
+  // One continuous rAF loop, and the ONLY place anything is drawn — input handlers just move the camera, they
+  // never render. We cap the render rate at ~60fps: iOS holds ProMotion displays at 60Hz when idle but ramps
+  // them to 120Hz *during touch*, so an unthrottled loop renders up to 120×/s while you pan. The gate below
+  // drops the extra ticks back to ~60 (that "over 60" reading was the display, not a double render).
+  const TARGET_FPS = 60;
+  const FRAME_MS = 1000 / TARGET_FPS; // ~16.67ms
+  const RENDER_GATE = FRAME_MS - 2; // a little slack so a 60Hz vsync isn't skipped by jitter; still caps ≤60
   let fps = 0;
   let prevTs = 0;
+  let lastRender = -Infinity;
   function frame(now) {
-    requestAnimationFrame(frame); // continuous 60fps loop
+    requestAnimationFrame(frame);
+    if (now - lastRender < RENDER_GATE) return; // over the 60fps budget → skip this tick, don't render
+    lastRender = now;
 
-    // FPS as an exponential moving average of the inter-frame interval.
-    if (prevTs) {
-      const dt = now - prevTs;
-      if (dt > 0) fps = fps ? fps * 0.9 + (1000 / dt) * 0.1 : 1000 / dt;
-    }
+    // FPS as an exponential moving average of the (rendered) inter-frame interval.
+    const dt = prevTs ? now - prevTs : 0;
     prevTs = now;
+    if (dt > 0) fps = fps ? fps * 0.9 + (1000 / dt) * 0.1 : 1000 / dt;
+
+    // Kinetic panning: after a flick, keep gliding and ease to a stop. The decay is per-ms so it feels the
+    // same regardless of frame interval; below a hair of a pixel per frame we snap to rest.
+    if (!dragging && (velX || velY) && dt > 0) {
+      panBy(velX * dt, velY * dt);
+      const decay = Math.pow(0.94, dt / FRAME_MS);
+      velX *= decay;
+      velY *= decay;
+      if (Math.abs(velX) < 0.002 && Math.abs(velY) < 0.002) velX = velY = 0;
+    }
 
     renderer.setUniforms({
       width: W,
