@@ -23,6 +23,8 @@
         margin: 0;
         height: 100%;
         overflow: hidden;
+        overscroll-behavior: none; /* kill iOS rubber-band/overscroll so a fast swipe doesn't fight the pan */
+        touch-action: none; /* no native scroll/zoom anywhere — the canvas owns every gesture */
         background: #e9e3d5;
         color: #000;
         font: 13px var(--mono);
@@ -51,6 +53,7 @@
       #fps {
         top: var(--pad-v);
         left: var(--pad-h);
+        min-width: 140px;
       }
       #repo {
         top: var(--pad-v);
