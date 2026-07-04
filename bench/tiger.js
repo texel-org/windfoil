@@ -44,16 +44,29 @@ export async function buildTigerScene({ emWorld, extent, color = null }) {
   let rawCurves = 0, monoPieces = 0;
 
   for (const shape of doc.data) {
-    // Flatten this shape's curves to [x0,y0,cx,cy,x1,y1,...], centered on the origin.
-    const quads = new Array(shape.curves.length * 6);
-    let k = 0;
-    for (const c of shape.curves) {
-      quads[k] = c[0] - cx; quads[k + 1] = c[1] - cy;
-      quads[k + 2] = c[2] - cx; quads[k + 3] = c[3] - cy;
-      quads[k + 4] = c[4] - cx; quads[k + 5] = c[5] - cy;
-      k += 6;
+    // Flatten this shape's curves to [x0,y0,cx,cy,x1,y1,...], centered on the origin. SVG fill semantics
+    // implicitly close every subpath, but the fixture stores only the curves that were drawn — two shapes
+    // (152, 160) end a subpath away from its start. An unclosed contour has no well-defined winding number
+    // (the two algorithms would disagree along the band swept by the missing edge — windfoil showed a phantom
+    // hairline, Slug a phantom speck), so append the implicit closing edge as a straight quad (control at the
+    // midpoint) wherever a subpath's end ≠ its start. Both atlases consume `quads`, so both stay identical.
+    const cs = shape.curves;
+    const quads = [];
+    let subX = 0, subY = 0; // current subpath's start point (centered)
+    for (let i = 0; i < cs.length; i++) {
+      const c = cs[i];
+      const x0 = c[0] - cx, y0 = c[1] - cy, x2 = c[4] - cx, y2 = c[5] - cy;
+      if (i === 0 || quads[quads.length - 2] !== x0 || quads[quads.length - 1] !== y0) {
+        subX = x0; subY = y0; // a pen-up move → new subpath
+      }
+      quads.push(x0, y0, c[2] - cx, c[3] - cy, x2, y2);
+      const last = i === cs.length - 1;
+      const breaks = last || cs[i + 1][0] - cx !== x2 || cs[i + 1][1] - cy !== y2;
+      if (breaks && (x2 !== subX || y2 !== subY)) {
+        quads.push(x2, y2, (x2 + subX) / 2, (y2 + subY) / 2, subX, subY);
+      }
     }
-    rawCurves += shape.curves.length;
+    rawCurves += quads.length / 6;
     const bbox = quadsBbox(quads);
 
     // windfoil: split into xy-monotone pieces, band by y.

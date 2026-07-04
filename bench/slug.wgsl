@@ -102,6 +102,13 @@ fn curve_cover(p1 : vec2<f32>, p2 : vec2<f32>, p3 : vec2<f32>, invDiam : f32) ->
   if (abs(a.y) < 1e-4 * (abs(b.y) + 1e-6)) {
     let t = c.y / (2.0 * b.y); // near-linear: double root at the linear solution
     t1 = t; t2 = t;
+  } else if (d == 0.0) {
+    // Grazing curve: the true discriminant is ≤ 0 (clamped), so the reference's (b ∓ d)/a collapses BOTH
+    // roots to the extremum b/a and their ramps cancel exactly. The q-form's {c/q, q/a} are equal roots only
+    // for an exact discriminant — with it clamped they are different points (c/b vs b/a), the ramps stop
+    // cancelling, and every near-tangent curve sprays ±1 coverage: the rim fringe on the self-crossing shape.
+    let t = b.y / a.y;
+    t1 = t; t2 = t;
   } else {
     let q = b.y + select(-d, d, b.y >= 0.0);
     t1 = select(q / a.y, c.y / q, b.y >= 0.0); // (b.y − d)/a.y
