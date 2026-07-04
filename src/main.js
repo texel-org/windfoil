@@ -95,7 +95,11 @@ const t1 = performance.now();
 
 const png = encodePNG(rgba, width, height);
 await Deno.mkdir(new URL("../output/", import.meta.url), { recursive: true });
-const outPath = new URL(`../output/windfoil.png`, import.meta.url);
+// box keeps its historical filename; other kernels render side by side ('=' → '-' for tidy names)
+const outName = kernel === "box"
+  ? "windfoil.png"
+  : `windfoil-${kernel.replace("=", "-")}.png`;
+const outPath = new URL(`../output/${outName}`, import.meta.url);
 await Deno.writeFile(outPath, png);
 
 console.log(
