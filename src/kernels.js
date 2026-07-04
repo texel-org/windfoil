@@ -11,8 +11,9 @@
 // Every kernel supplies, in PIXEL units (see the contract comment in windfoil-ext.wgsl):
 //   k_xcum(u,v)  Φ — the horizontal cumulative, the only thing the crossing quadrature needs
 //   k_ycdf(v)    the marginal CDF (far-right weight)
-//   k_cell(...)  rect mass (minification guard)
 //   radii, Y_KNOTS / X_SPLITS (piecewise boundaries), and a Gauss–Legendre order N_GL.
+// windfoil-ext.wgsl is the EXACTNESS reference: no minification guard, no approximation tiers — the plain
+// analytic path at every size (the core shader's accelerations would generalize; see docs/KERNELS.md).
 //
 // Accuracy accounting (why each N_GL / N_SUB / split list is what it is): inside a quadrature segment the
 // integrand is Φ(u(t), v(t))·v′(t) with u, v quadratic in t. Windows are pre-split at Y_KNOTS and segments at
@@ -24,6 +25,7 @@
 // |ΔF| per piece, f64, random + adversarial monotone pieces vs a GL-8×32 reference (the sweep is
 // tools/kernel-tune.js — rerun it when touching any budget):
 //   box-ext    degree 3  → GL-2 exact            (measured 1.1e-15)
+//   boxblur    degree 3  → GL-2 exact            (measured 1.1e-15 — box-ext with a diameter)
 //   tent       degree 7  → GL-4 exact            (measured 1.0e-15)
 //   mblur      degree 5  → GL-3 exact            (measured 1.1e-15)
 //   BC family  degree 15, C²-joins at u=0,±1: X_SPLITS {−1,0,1} + Y_KNOTS {−1,0,1}, GL-5 → 3.4e-6
@@ -32,6 +34,9 @@
 //   disc       the rim's slope is unbounded (√): GL-8 × N_SUB 2 → ~2e-3 WORST CASE at rim-grazing edges
 //              (sub-visible: ~0.6/255, and only where an edge runs tangent to the bokeh circle; typical
 //              pixels are orders of magnitude better). The price of a genuinely non-polynomial kernel.
+//   iris       linear edge bounds (no √): GL-8 × N_SUB 2 → ~5e-4, with the polygon's vertex heights as
+//              Y_KNOTS — including the v-extremes of apertures that are asymmetric in v (odd blade counts),
+//              which sit strictly inside the ±RY slab and measured 3.1e-2 when left unsplit.
 //
 // Kernels with parameters take them after '=': e.g. 'mblur=12' (motion length px), 'disc=2.5' (radius px).
 
@@ -89,10 +94,7 @@ function block({ name, rx, ry, glOrder, nSub = 1, yKnots = [], xSplits = [], fns
 const separable = (fns1d) => `
 ${fns1d.trim()}
 fn k_xcum(u : f32, v : f32) -> f32 { return kcdf(u) * kpdf(v); }
-fn k_ycdf(v : f32) -> f32 { return kcdf(v); }
-fn k_cell(u0 : f32, u1 : f32, v0 : f32, v1 : f32) -> f32 {
-  return (kcdf(u1) - kcdf(u0)) * (kcdf(v1) - kcdf(v0));
-}`;
+fn k_ycdf(v : f32) -> f32 { return kcdf(v); }`;
 
 // JS twin of `separable`: the same kernel as plain functions, for the validation tools' ground truth
 // (density) and CPU replica (xcum/ycdf). Keeping shader text and JS ref side by side per kernel makes a
@@ -193,6 +195,22 @@ fn kcdf(t : f32) -> f32 { return clamp(t + 0.5, 0.0, 1.0); }
 fn kpdf(t : f32) -> f32 { return select(0.0, 1.0, abs(t) < 0.5); }`),
     ref: sepRef(boxCdf, boxPdf),
   },
+  boxblur: {
+    blurb: 'the box filter widened to D px (boxblur=D, default 4) — an exact analytic box blur: edges ramp over D px, sub-D features dim to their ink average. The kernel-interface realization of NOTES.md §Box Blur.',
+    param: { name: 'D', default: 4, min: 1 },
+    make: (D) => {
+      const H = D / 2;
+      const cdf = (t) => Math.max(0, Math.min(1, t / D + 0.5));
+      const pdf = (t) => (Math.abs(t) < H ? 1 / D : 0);
+      return {
+        rx: H, ry: H, glOrder: 2, // Φ linear · (ky const) · v′ → degree 3 → GL-2 exact, like box-ext
+        fns: separable(`
+fn kcdf(t : f32) -> f32 { return clamp(t * ${lit(1 / D)} + 0.5, 0.0, 1.0); }
+fn kpdf(t : f32) -> f32 { return select(0.0, ${lit(1 / D)}, abs(t) < ${lit(H)}); }`),
+        ref: sepRef(cdf, pdf),
+      };
+    },
+  },
   tent: {
     blurb: 'tent / bilinear (2×2 px) — the gentle default upgrade: kills stair-stepping shimmer, mild blur. Exact.',
     rx: 1, ry: 1, glOrder: 4, yKnots: [0], xSplits: [0],
@@ -245,10 +263,7 @@ fn kxcdf(t : f32) -> f32 {
   return select(select(mid, cHi, a > ${lit(W - 1)}), cLo, a < ${lit(-(W - 1))});
 }
 fn k_xcum(u : f32, v : f32) -> f32 { return kxcdf(u) * select(0.0, 1.0, abs(v) < 0.5); }
-fn k_ycdf(v : f32) -> f32 { return clamp(v + 0.5, 0.0, 1.0); }
-fn k_cell(u0 : f32, u1 : f32, v0 : f32, v1 : f32) -> f32 {
-  return (kxcdf(u1) - kxcdf(u0)) * (clamp(v1 + 0.5, 0.0, 1.0) - clamp(v0 + 0.5, 0.0, 1.0));
-}`,
+fn k_ycdf(v : f32) -> f32 { return clamp(v + 0.5, 0.0, 1.0); }`,
         ref: {
           density: (u, v) => trapPdf(u) * boxPdf(v),
           xcum: (u, v) => trapCdf(u) * boxPdf(v),
@@ -272,15 +287,6 @@ fn k_ycdf(v : f32) -> f32 {
   let a = clamp(v, ${lit(-R)}, ${lit(R)});
   let w = sqrt(max(${lit(R * R)} - a * a, 0.0));
   return 0.5 + (a * w + ${lit(R * R)} * asin(clamp(a * ${lit(1 / R)}, -1.0, 1.0))) * ${lit(1 / (Math.PI * R * R))};
-}
-// Guard stand-in: the disc's marginals are semicircles; a smoothstep CDF per axis is a close separable
-// approximation, and the guard only runs on sub-4px instances where the difference is unresolvable.
-fn scdf(t : f32) -> f32 {
-  let s = clamp(t * ${lit(1 / (2 * R))} + 0.5, 0.0, 1.0);
-  return s * s * (3.0 - 2.0 * s);
-}
-fn k_cell(u0 : f32, u1 : f32, v0 : f32, v1 : f32) -> f32 {
-  return (scdf(u1) - scdf(u0)) * (scdf(v1) - scdf(v0));
 }`,
       ref: {
         density: (u, v) => (u * u + v * v <= R * R ? 1 / (Math.PI * R * R) : 0),
@@ -383,14 +389,6 @@ fn k_ycdf(v : f32) -> f32 {
   var m : f32 = 0.0;
 ${cdfLines}
   return m * ${lit(invA)};
-}
-// Guard stand-in, same rationale as the disc's: separable smoothstep on sub-4px instances.
-fn scdf(t : f32) -> f32 {
-  let s = clamp(t * ${lit(1 / (rx + ry))} + 0.5, 0.0, 1.0);
-  return s * s * (3.0 - 2.0 * s);
-}
-fn k_cell(u0 : f32, u1 : f32, v0 : f32, v1 : f32) -> f32 {
-  return (scdf(u1) - scdf(u0)) * (scdf(v1) - scdf(v0));
 }`,
         ref: {
           density: (u, v) => {

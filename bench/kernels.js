@@ -12,8 +12,9 @@
 //
 // The interesting outputs:
 //   • the ladder table — each kernel's per-frame cost as a multiple of box at every zoom level. The support
-//     story is mechanical (a 2·R px slab touches ~2·R× the bands and culls at ±R·sx), so expect tent ≈ 2–3×,
-//     gaussian ≈ 3–5×, the 4×4 cubics ≈ 4–8×, and the guard flattening all of them back to ~box below ~4px.
+//     story is mechanical (a 2·R px slab touches ~2·R× the bands and culls at ±R·sx). Below ~4px the CORE
+//     shader switches to its minification guard while the ext shader (the exactness reference) keeps
+//     gathering, so the small-size multipliers measure guard-vs-exact, not kernel cost.
 //   • --images / --montage — the zone plate (Moiré), the sub-pixel fan (thin-stroke tone), and small text
 //     make the kernels' visual trade visible by eye; mblur/disc strips demo the analytic-effects direction.
 
@@ -59,10 +60,12 @@ for (const k of KERNEL_LIST) resolveKernel(k); // fail fast on typos
 const levelsArg = argValue('levels');
 const parseLevels = (def) =>
   (levelsArg ? levelsArg.split(',').map(Number) : def).filter((v) => Number.isFinite(v) && v > 0).sort((a, b) => a - b);
-// Shorter ladders than bench/main.js — each level runs once per KERNEL, and the regimes of interest are the
-// guard handoff (few px), windfoil's small-text worst case, reading sizes, and one deep-magnification point.
+// Shorter ladders than bench/main.js — each level runs once per KERNEL. The ext shader is the exactness
+// reference and deliberately has NO minification guard, so its minified cost grows with the footprint; the
+// 4px row shows that honestly and the 2px row (all guard on the core side, all gather on the ext side) is
+// left out of the default ladder to keep runtimes sane.
 const LEVELS = {
-  glyphs: parseLevels([2, 4, 8, 16, 32, 64, 256, 1024, 4096]),
+  glyphs: parseLevels([4, 8, 16, 32, 64, 256, 1024, 4096]),
   shape: parseLevels([16, 32, 64, 256, 1024, 4096]),
   tiger: parseLevels([64, 128, 256, 512, 1024, 4096]),
   hairlines: parseLevels([128, 256, 512, 1024, 2048]),
@@ -205,15 +208,17 @@ const makeRenderer = (scene, kernel, idx) => {
 // Crops of the same view rendered under each kernel, side by side, each with a caption bar — rendered by the
 // engine itself (layoutLine + the box kernel), which is both dogfooding and the only text rasterizer here.
 const LABEL_H = 22, SEP = 2;
+const LABEL_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789=.-,· ';
 let labelKit = null;
-async function renderLabel(text, w) {
+async function ensureLabelKit() {
   if (!labelKit) {
     const font = await loadFont(new URL('../assets/Lato-Regular.ttf', import.meta.url));
-    labelKit = { font, cache: {} };
+    labelKit = { font, atlas: buildGlyphAtlas(font, LABEL_CHARS + SCENE_TEXT) };
   }
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789=.-· ';
-  if (!labelKit.atlas) labelKit.atlas = buildGlyphAtlas(labelKit.font, chars + SCENE_TEXT);
-  const { atlas, font } = labelKit;
+  return labelKit;
+}
+async function renderLabel(text, w) {
+  const { atlas, font } = await ensureLabelKit();
   const size = 13;
   const inst = [];
   const tw = measureText(text, font, size);
@@ -253,6 +258,68 @@ async function renderLabel(text, w) {
 
 function blit(dst, dW, src, sW, sH, dx, dy) {
   for (let y = 0; y < sH; y++) dst.set(src.subarray(y * sW * 4, (y + 1) * sW * 4), ((dy + y) * dW + dx) * 4);
+}
+
+// The bokeh-lights strip: a scatter of period/middle-dot glyphs as warm POINT LIGHTS on near-black — the
+// one setting where an aperture's SHAPE is unmistakable (each sub-pixel-ish dot renders as the kernel:
+// circle under `disc`, hexagon/triangle/pentagon under `iris`). Dark-on-light text only ever shows generic
+// blur, so this panel is light-on-dark by construction.
+async function bokehLightsStrip(kernels) {
+  const { font, atlas } = await ensureLabelKit();
+  const crop = 250;
+  const inst = [];
+  let seed = 7;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for (let i = 0; i < 46; i++) {
+    const size = 16 + rnd() * 42; // period ink ≈ 0.1em → ~1.5–6px dots
+    const warm = 0.75 + rnd() * 0.25;
+    layoutLine(inst, rnd() < 0.5 ? '.' : '·', atlas.table, font, {
+      x: 6 + rnd() * (crop - 18), baselineY: 10 + rnd() * (crop - 16), fontSizePx: size,
+      color: [warm, warm * 0.94, warm * 0.8, 1],
+    });
+  }
+  const instances = new Float32Array(inst);
+  const cols = kernels.length;
+  const MW = cols * crop + (cols - 1) * SEP, MH = LABEL_H + crop;
+  const out = new Uint8Array(MW * MH * 4).fill(255);
+  const pt = device.createTexture({
+    size: [crop, crop], format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+  });
+  for (let c = 0; c < cols; c++) {
+    const k = kernels[c];
+    if (!kernelCode[k]) kernelCode[k] = await loadKernelShaderCode(k);
+    const r = createGlyphRenderer(device, {
+      code: kernelCode[k], format, curves: atlas.curves, rows: atlas.rows,
+      instances, instanceCount: instances.length / 16,
+    });
+    r.setUniforms({ width: crop, height: crop });
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginRenderPass({
+      colorAttachments: [{
+        view: pt.createView(), clearValue: { r: 0.05, g: 0.05, b: 0.07, a: 1 }, loadOp: 'clear', storeOp: 'store',
+      }],
+    });
+    r.draw(pass);
+    pass.end();
+    const bpr = Math.ceil((crop * 4) / 256) * 256;
+    const buf = device.createBuffer({ size: bpr * crop, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    enc.copyTextureToBuffer({ texture: pt }, { buffer: buf, bytesPerRow: bpr }, [crop, crop]);
+    device.queue.submit([enc.finish()]);
+    await buf.mapAsync(GPUMapMode.READ);
+    const padded = new Uint8Array(buf.getMappedRange());
+    const panel = new Uint8Array(crop * crop * 4);
+    for (let y = 0; y < crop; y++) panel.set(padded.subarray(y * bpr, y * bpr + crop * 4), y * crop * 4);
+    buf.unmap();
+    buf.destroy();
+    const x0 = c * (crop + SEP);
+    blit(out, MW, await renderLabel(k, crop), crop, LABEL_H, x0, 0);
+    blit(out, MW, panel, crop, crop, x0, LABEL_H);
+  }
+  pt.destroy();
+  const dir = new URL('../output/bench/kernels/', import.meta.url);
+  await Deno.mkdir(dir, { recursive: true });
+  await Deno.writeFile(new URL('bokeh_lights.png', dir), encodePNG(out, MW, MH));
+  console.log(`  wrote output/bench/kernels/bokeh_lights.png (${MW}×${MH})`);
 }
 
 // One strip: the scene at `emPx`, cropped to crop×crop centred at (W/2 + offX, H/2 + offY), one panel per
@@ -309,6 +376,8 @@ for (const which of SCENES) {
         name: 'glyphs_0064px_effects', emPx: 64, crop: 250,
         kernels: ['box', 'mblur=12', 'disc=4', 'iris=4', 'iris=4,5,18'],
       });
+      // aperture shapes on point LIGHTS (the only setting where bokeh shape truly reads)
+      await bokehLightsStrip(['box', 'disc=5', 'iris=5', 'iris=5,3,30', 'iris=5,5,18']);
     } else if (which === 'tiger') {
       await montageStrip(scene, { name: 'tiger_0256px', emPx: 256, crop: 250, kernels: KERNEL_LIST });
     }

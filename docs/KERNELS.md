@@ -12,7 +12,7 @@ deno task render --kernel gaussian              # the PNG ladder under a truncat
 deno run --unstable-webgpu -A bench/kernels.js  # per-kernel cost ladders vs the box baseline
 deno run --unstable-webgpu -A bench/kernels.js --montage   # labeled side-by-side comparison strips
 deno task validate-kernels                      # every kernel vs an independent ground truth
-deno task serve                                 # then open localhost:8080/?kernel=mitchell  (or mblur=8, disc=2 …)
+deno task serve                                 # then open localhost:8080/?kernel=mitchell  (or mblur=8, disc=2, iris=3 …)
 ```
 
 The API is one function: `loadKernelShaderCode(name)` in [`src/kernels.js`](../src/kernels.js) returns WGSL
@@ -25,6 +25,7 @@ is a **pipeline**, cached per kernel — deliberately not a uniform branch (see 
 | kernel | support (px) | character | negative lobes | quadrature accuracy¹ |
 | --- | --- | --- | --- | --- |
 | `box` | 1×1 | THE reference: the exact box filter, sharpest possible AA | – | exact (closed form) |
+| `boxblur=D` | D×D | the box widened to D px — an **exact analytic box blur** (edges ramp over D px, sub-D features dim to their ink average; NOTES.md §Box Blur realized) | – | **exact** |
 | `tent` | 2×2 | the gentle upgrade: kills box shimmer under motion/scroll, mild blur | – | **exact** |
 | `gaussian` | 3×3 | σ = 0.5 px truncated at 3σ: film-like, smoothest gradients, immune to Moiré | – | 2.0e-6 |
 | `mitchell` | 4×4 | Mitchell–Netravali B=C=⅓: mild sharpening for print/static output | −6/343 (≈1.7%) | 3.4e-6 |
@@ -32,6 +33,7 @@ is a **pipeline**, cached per kernel — deliberately not a uniform branch (see 
 | `catmullrom` | 4×4 | Catmull–Rom C=½: strongest sharpening | −1/24 (≈4.2%) | 2.8e-6 |
 | `mblur=L` | (L+1)×1 | **exact analytic horizontal motion blur** (box pixel ⊛ box shutter, L px) | – | **exact** |
 | `disc=R` | 2R×2R | uniform bokeh circle — and the proof the interface takes non-separable kernels | – | 2.1e-3² |
+| `iris=R,N,rot°` | ≤2R×2R | regular N-blade polygonal aperture (default hexagon): SHAPED bokeh — highlights render as hexagons/pentagons the way a real lens iris draws them. Linear edges, so it even beats the disc's accuracy | – | ~5e-4 |
 | `box-ext` | 1×1 | the box through the ext machinery — debug cross-check only | – | exact |
 
 ¹ worst per-piece |ΔF| vs an effectively-exact reference over 4k random + 244 adversarial monotone pieces
@@ -45,7 +47,8 @@ non-polynomial); typical pixels are orders of magnitude better. The price of a g
 `tent` when box's pixel-locked crispness aliases under animation; `gaussian` for offline/print gradients
 and anything zone-plate-like (Moiré); `mitchell`/`catmullrom` when downstream viewing softens the image
 (print dot gain, video re-encode) and you want edges pre-compensated; `bspline` for deliberately soft,
-strictly-positive rendering. `mblur`/`disc` are effect kernels — see the last section.
+strictly-positive rendering; `boxblur` when you want a plain, honest blur that is still fully analytic.
+`mblur`/`disc`/`iris` are effect kernels — see the last section.
 
 Seeing beats reading (`bench/kernels.js --montage` regenerates these; labels are rendered by the engine
 itself). The zone plate is the classic prefilter test — the box's Moiré swirls die out kernel by kernel:
@@ -59,6 +62,11 @@ lengths, bokeh radii) rendered by the *coverage integral itself*, no post-proces
 ![13px text, per kernel](img/kernels/glyphs_0013px.png)
 ![sub-pixel fan close-up, per kernel](img/kernels/hairlines_1024px_center.png)
 ![motion blur and bokeh strips](img/kernels/glyphs_0064px_effects.png)
+
+And the aperture-shape proof — point lights on dark, where bokeh shape actually reads (dark-on-light text
+only ever shows generic blur): every dot renders as the kernel itself — circle, hexagon, triangle, pentagon:
+
+![point lights per aperture: box, disc, hexagonal / triangular / pentagonal iris](img/kernels/bokeh_lights.png)
 
 ## The math, in one paragraph
 
@@ -78,17 +86,23 @@ evaluation, whatever the kernel); only pieces **crossing** the support integrate
 Gauss–Legendre between the support-edge roots, split at the kernel's interior knots so each segment is one
 polynomial (which makes tent/mblur/box *exact*) and composite-sliced (`N_SUB`) so a steep piece can't compress
 the kernel's whole y-profile into an under-resolved sliver. Because the gather runs in pixel units, `F` comes
-out normalized — no ÷(sx·sy). The minification guard generalizes the same way: each band's uniform-density ink
-cell is weighted by `k_cell` (the kernel's mass over the cell rect), which for the box reduces term-for-term
-to the shipped linear-overlap arithmetic.
+out normalized — no ÷(sx·sy).
+
+One deliberate non-feature: **the ext shader carries none of the core's accelerations** — no minification
+guard, no approximation tiers. It is the *exactness reference* for every kernel: what it draws at any size IS
+the kernel-filtered winding, evaluated by the plain analytic path. The accelerations would generalize if a
+product wanted them (the guard's banded ink profile weighted by the kernel's rect mass — for separable
+kernels a product of CDF differences — reduces term-for-term to the shipped box guard; verified in the
+derivation pass, left unbuilt), but keeping them out keeps the file small, clean, and obviously about the
+kernels.
 
 Since Φ is the only thing the crossing quadrature evaluates, the interface is **not limited to separable
 kernels** — the bokeh disc supplies `Φ(u,v) = (clamp(u,−w,w)+w)/πR²` with `w(v) = √(R²−v²)` and just works.
 
 Prior art for polynomial-filter boundary integrals: Manson & Schaefer, *Analytic Rasterization of Curves with
 Polynomial Filters* (EG 2013); Jonathan Olson's *Exact Polygonal Filtering* — see `ALGORITHM.md` §9. What is
-new here relative to those: the row-band gather structure, the far-field CDF telescoping, the per-piece knot
-splitting, and the kernel-weighted minification guard all carrying over unchanged from the box shader.
+new here relative to those: the row-band gather structure, the far-field CDF telescoping and the per-piece
+knot splitting all carrying over unchanged from the box shader.
 
 ## The default costs zero
 
@@ -113,28 +127,32 @@ median — same methodology as `bench/main.js`; your numbers will differ):
 
 | px | box | tent | gaussian | mitchell | bspline | catmullrom |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2 (guard) | 1.73m | 1.9× | 2.4× | 3.3× | 3.2× | 3.2× |
-| 4 (guard) | 0.44m | 2.2× | 2.6× | 3.5× | 3.5× | 3.5× |
-| 8 | 3.39m | 8.9× | 11.7× | 26.3× | 25.2× | 24.4× |
-| 16 | 1.30m | 7.9× | 7.9× | 23.1× | 21.8× | 21.3× |
-| 32 | 0.56m | 6.6× | 5.6× | 17.6× | 17.3× | 16.7× |
-| 64 | 0.31m | 5.1× | 4.4× | 14.4× | 13.6× | 13.2× |
-| 256 | 0.19m | 2.4× | 1.9× | 4.9× | 4.9× | 5.0× |
-| 1024 | 0.21m | 1.8× | 1.3× | 3.1× | 3.1× | 3.1× |
-| 4096 | 0.21m | 1.2× | 1.2× | 1.5× | 1.4× | 1.5× |
+| 4¹ | 0.46m | 209× | 273× | 471× | 468× | 462× |
+| 8 | 3.34m | 8.4× | 10.8× | 24.7× | 24.6× | 24.2× |
+| 16 | 1.19m | 7.9× | 8.2× | 22.6× | 22.5× | 22.3× |
+| 32 | 0.53m | 6.3× | 5.6× | 18.0× | 18.0× | 17.9× |
+| 64 | 0.31m | 4.7× | 3.8× | 12.7× | 12.6× | 12.7× |
+| 256 | 0.19m | 2.6× | 1.9× | 5.6× | 5.6× | 5.7× |
+| 1024 | 0.19m | 1.8× | 1.3× | 3.1× | 3.1× | 3.1× |
+| 4096 | 0.11m | 1.1× | 1.1× | 1.3× | 1.3× | 1.3× |
+
+¹ the 4px row is measuring the guard, not the kernels: below ~4px the CORE shader renders from its banded
+ink profile while the ext shader — the exactness reference, deliberately guard-free — keeps gathering
+exactly. That ~2-orders gap is the price of "exact all the way down", stated honestly; a product wanting
+minified wide-kernel content fast would port the guard (see "the math" above).
 
 **hairlines (fan + spikes + zone plate)** and **tiger SVG (304 shapes, painter's-order overdraw)**:
 
 | px | box | tent | gaussian | mitchell | | px | box | tent | gaussian | mitchell |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| hair 128 | 8.50m | 5.1× | 4.7× | 14.9× | | tiger 64 | 42.1m | 7.1× | 9.7× | 17.1× |
-| hair 256 | 6.03m | 3.9× | 2.7× | 10.2× | | tiger 128 | 12.3m | 6.9× | 8.7× | 18.1× |
-| hair 512 | 3.98m | 3.9× | 2.3× | 8.6× | | tiger 256 | 7.32m | 5.2× | 5.8× | 13.2× |
-| hair 1024 | 3.63m | 2.7× | 1.8× | 5.3× | | tiger 512 | 5.55m | 3.6× | 3.9× | 8.6× |
-| hair 2048 | 3.06m | 2.4× | 1.5× | 4.2× | | tiger 4096 | 5.34m | 1.7× | 1.4× | 2.8× |
+| hair 128 | 8.19m | 4.9× | 4.2× | 15.5× | | tiger 64 | 40.9m | 6.9× | 10.0× | 18.3× |
+| hair 256 | 6.05m | 3.8× | 2.6× | 10.1× | | tiger 128 | 11.9m | 6.9× | 8.6× | 18.4× |
+| hair 512 | 3.99m | 3.7× | 2.3× | 8.4× | | tiger 256 | 7.27m | 5.1× | 5.5× | 13.2× |
+| hair 1024 | 3.40m | 2.8× | 1.8× | 5.4× | | tiger 512 | 2.94m | 5.2× | 5.7× | 12.2× |
+| hair 2048 | 2.98m | 2.4× | 1.6× | 4.3× | | tiger 4096 | 5.26m | 1.7× | 1.3× | 2.7× |
 
 The dense self-crossing **shape** scene at its minified worst (16px, every curve spanning every pixel's slab)
-prices the ceiling honestly: tent 9.9×, gaussian 10.2×, the cubics 36–41×. That scene is already the box
+prices the ceiling honestly: tent ~10×, gaussian ~10×, the cubics ~36–41×. That scene is already the box
 gather's own structural worst case against Slug (`bench/README.md`); wide kernels multiply it, they don't
 cause it.
 
@@ -142,8 +160,7 @@ The shape of the cost is mechanical, not incidental: a kernel with half-support 
 band slab (≈ `2R×` the bands), culls curves at `±R·sx` (more pieces classified "crossing"), and each crossing
 runs the segmented quadrature instead of a closed form. So the multiplier peaks exactly where windfoil's
 exact gather is already at its worst — the 8–16 px small-text regime — and decays toward ~1× at deep
-magnification (a footprint of ~1 curve) and toward the guard's flat cost at illegible sizes. Two structural
-choices keep it this low:
+magnification (a footprint of ~1 curve). Two structural choices keep it this low:
 
 - **knots split pieces, not windows.** The kernel's polynomial knots are applied as per-piece t-splits inside
   the crossing quadrature only, after a hull prefilter (a knot the piece doesn't straddle costs nothing). The
@@ -153,9 +170,9 @@ choices keep it this low:
 - **far pieces never pay.** The fully-right path is an exact CDF evaluation regardless of kernel, so the
   far-field majority of gathered pieces costs the same compare-and-two-evals it does under the box.
 
-Practical read: `tent` and `gaussian` are realtime-viable outside the small-text trough (~2–5× at reading
-sizes and above, ~1.2× zoomed in); the 4×4 cubics are priced for static/offline output, which is what they
-are for; and everything converges to the guard at thumbnail sizes, so minified UI never melts down.
+Practical read: `tent` and `gaussian` are realtime-viable outside the small-text trough (~2–6× at reading
+sizes and above, ~1.1–1.3× zoomed in); the 4×4 cubics are priced for static/offline output, which is what
+they are for; and minified content is the one regime this reference shader deliberately does not chase.
 
 ## Validation
 
@@ -192,6 +209,15 @@ filters into **camera and lens territory**, analytically — no multi-sampling, 
   A text scroller rendered with `mblur=16` is what a camera panning at 16 px/frame would capture.
 - **`disc=R`** is a real bokeh circle (uniform disc), the classic "lens blur" that a Gaussian only fakes —
   and it is non-separable, which the Φ interface absorbs in six lines of WGSL.
+- **`iris=R,N,rot°`** is the shaped version — a regular N-blade aperture (hexagon by default, any 3–12,
+  rotatable): out-of-focus highlights take the polygon's shape exactly as a physical lens iris draws them.
+  Every convex aperture reduces to per-row bounds `[xL(v), xR(v)]` that are mins/maxes of LINEAR edge
+  functions, so it is cheaper-behaved than the disc's √rim (and measures ~4× more accurate). Generated
+  entirely from the vertex list at registry build; `bench/kernels.js --montage` puts disc and iris side by
+  side at the same radius so the aperture shape is the only difference.
+- **`boxblur=D`** rounds out the set: the plain analytic box blur (exact, GL-2), for when the point is blur
+  rather than bokeh character. This is NOTES.md §Box Blur through the kernel interface; the core-shader
+  trick sketched there (scaling `s` before the gather) remains available for a guard-accelerated blur.
 
 Moonshots for a fork (none of these need new math, only plumbing):
 
@@ -200,9 +226,9 @@ Moonshots for a fork (none of these need new math, only plumbing):
   constant-folded specialization would become a uniform-radius evaluation; expect the disc's cost to apply
   everywhere, so gate it per-instance like the minification guard gates its path.)
 - **Oriented motion blur** — the trapezoid kernel rotated per instance. Φ of a rotated separable kernel is no
-  longer separable in pixel axes, but it stays closed-form (it is the disc trick with an anisotropic
-  footprint); per-instance velocity vectors give every glyph its own smear direction. Spinning text renders
-  its own radial blur.
+  longer separable in pixel axes, but it stays closed-form — the iris shows the recipe (row bounds from
+  oriented edge lines); per-instance velocity vectors give every glyph its own smear direction. Spinning
+  text renders its own radial blur.
 - **Chromatic fringing / lens aberration** — three gathers (or three draws) with per-channel radii: R
   slightly wider than G wider than B is longitudinal chromatic aberration; radius growing with distance from
   the screen center is field curvature. The gather is per-fragment, so a *screen-varying* kernel is just `s`
@@ -220,8 +246,9 @@ Moonshots for a fork (none of these need new math, only plumbing):
 ## Limitations
 
 Inherited from the core (see `ALGORITHM.md` §8): local-space filtering under rotation/shear, deep-zoom f32
-edge wobble, the winding-fold model. Kernel-specific: the disc's rim quadrature error (~2e-3 worst-case, rim-tangent
-edges only); the guard's `k_cell` for the disc uses a separable smoothstep stand-in (sub-4px instances only,
-where the difference is unresolvable); `mblur`'s length is compile-time in this pass (see per-instance
-parameters above); wide kernels raise the effective AA skirt, so the vertex pad grows to `R + 0.5` px —
-fragment counts rise accordingly for tiny instances.
+edge wobble, the winding-fold model. Kernel-specific: the disc's rim quadrature error (~2e-3 worst-case,
+rim-tangent edges only); `mblur`'s length is compile-time in this pass (see per-instance parameters above);
+wide kernels raise the effective AA skirt, so the vertex pad grows to `R + 0.5` px — fragment counts rise
+accordingly for tiny instances. And by design, **no minification guard**: the ext shader keeps gathering
+exactly at sizes where the core switches to its banded ink profile, so deeply minified content costs what
+exactness costs — use the core box shader (or port the guard) for thumbnail-heavy realtime workloads.

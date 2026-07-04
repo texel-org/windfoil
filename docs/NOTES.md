@@ -90,6 +90,10 @@ Wire-up: coarse cell grid with per-cell `[curveStart, count]` + `W`, read in `in
 
 ## Box Blur
 
+> **Status:** built through the kernel interface — `boxblur=D` in [`KERNELS.md`](KERNELS.md) (exact, GL-2).
+> The in-place `sEff = s·blur` trick below remains open for the CORE shader, where it would keep the
+> minification guard and band selection intact instead of compiling a second pipeline.
+
 A box filter over a **wider** box is a box blur, and the gather already computes an exact box filter over the
 footprint `s`. So scale `s` up before the gather: `k` device px → a `k`px blur, no second sample or SDF, same
 path. Edges ramp over `k`px, sub-`k` stems dim to the ink average, consistent width at any zoom.

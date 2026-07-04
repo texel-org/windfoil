@@ -61,6 +61,8 @@ const CASES = [
   ['tent', [{}]],
   ['mblur=8', [{}]],
   ['mblur=1', [{}]],
+  ['boxblur=4', [{}]],
+  ['boxblur=9', [{}]],
   ['gaussian', [{}, { glOrder: 5, nSub: 3 }, { glOrder: 5, nSub: 1 }]],
   ['mitchell', [{}, { xSplits: [-1, 1] }, { yKnots: [-1, 1], xSplits: [-1, 1] }]],
   ['bspline', [{}]],
