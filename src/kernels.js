@@ -296,6 +296,118 @@ fn k_cell(u0 : f32, u1 : f32, v0 : f32, v1 : f32) -> f32 {
       },
     }),
   },
+  iris: {
+    blurb: 'regular polygonal aperture (iris=R[,N[,rotDeg]] — circumradius px, blade count 3–12 default 6, rotation): shaped bokeh — highlights render as hexagons/pentagons the way an N-blade lens iris draws them. disc is the N→∞ case.',
+    param: { name: 'R', default: 3, min: 0.5 },
+    make: (R, N = 6, rotDeg = 0) => {
+      N = Math.round(N);
+      if (!Number.isFinite(N) || N < 3 || N > 12) throw new Error(`iris blade count must be 3..12, got ${N}`);
+      if (!Number.isFinite(rotDeg)) throw new Error(`iris rotation must be a number of degrees`);
+      const rot = (rotDeg * Math.PI) / 180;
+      const vs = Array.from({ length: N }, (_, k) => {
+        const a = rot + (2 * Math.PI * k) / N;
+        return [R * Math.cos(a), R * Math.sin(a)];
+      });
+      // Every convex aperture reduces to per-row bounds: at height v the polygon spans [xL(v), xR(v)], each
+      // bound the min/max of a few LINEAR edge functions x = m·v + b — no √, gentler than the disc's rim.
+      // Near-horizontal edges only occur at the v-extremes of a regular polygon, where the gather's slab
+      // clipping already bounds v, so they need no x-bound line.
+      const right = [], left = [];
+      for (let k = 0; k < N; k++) {
+        const [x0, y0] = vs[k], [x1, y1] = vs[(k + 1) % N];
+        if (Math.abs(y1 - y0) < 1e-9 * R) continue;
+        const m = (x1 - x0) / (y1 - y0), b = x0 - m * y0;
+        (m * ((y0 + y1) / 2) + b > 0 ? right : left).push([m, b]); // origin-centred convex ⇒ side by sign
+      }
+      const rx = Math.max(...vs.map((p) => Math.abs(p[0])));
+      const ry = Math.max(...vs.map((p) => Math.abs(p[1])));
+      const rowBounds = (v) => {
+        let xl = -Infinity, xr = Infinity;
+        for (const [m, b] of right) xr = Math.min(xr, m * v + b);
+        for (const [m, b] of left) xl = Math.max(xl, m * v + b);
+        return [xl, xr];
+      };
+      // Width(v) is linear between vertex heights → the marginal CDF is an exact piecewise quadratic; the
+      // same intervals normalize the area (so M(ry) = 1 exactly) and feed Y_KNOTS.
+      const heights = [...new Set(vs.map((p) => +p[1].toFixed(9)))].sort((a, b) => a - b);
+      const ivs = [];
+      for (let i = 0; i + 1 < heights.length; i++) {
+        const lo = heights[i], hi = heights[i + 1];
+        if (hi - lo < 1e-9 * R) continue;
+        const eps = (hi - lo) * 1e-7; // sample just inside so the active edge set is unambiguous at vertices
+        const [al, ar] = rowBounds(lo + eps), [bl, br] = rowBounds(hi - eps);
+        const wa = Math.max(ar - al, 0), wb = Math.max(br - bl, 0);
+        const w1 = (wb - wa) / (hi - lo), w0 = wa - w1 * lo;
+        ivs.push({ lo, hi, w0, w1 });
+      }
+      const area = ivs.reduce((a, iv) => a + iv.w0 * (iv.hi - iv.lo) + (iv.w1 / 2) * (iv.hi * iv.hi - iv.lo * iv.lo), 0);
+      const invA = 1 / area;
+      const jsYcdf = (v) => {
+        let m = 0;
+        for (const iv of ivs) {
+          const a = Math.max(iv.lo, Math.min(iv.hi, v));
+          m += iv.w0 * (a - iv.lo) + (iv.w1 / 2) * (a * a - iv.lo * iv.lo);
+        }
+        return m * invA;
+      };
+      const boundLines = [
+        ...right.map(([m, b]) => `  xr = min(xr, ${lit(m)} * v + ${lit(b)});`),
+        ...left.map(([m, b]) => `  xl = max(xl, ${lit(m)} * v + ${lit(b)});`),
+      ].join('\n');
+      const cdfLines = ivs.map(({ lo, hi, w0, w1 }, i) =>
+        `  let a${i} = clamp(v, ${lit(lo)}, ${lit(hi)});\n` +
+        `  m += ${lit(w0)} * (a${i} - ${lit(lo)}) + ${lit(w1 / 2)} * (a${i} * a${i} - ${lit(lo * lo)});`
+      ).join('\n');
+      const minV = heights[0], maxV = heights[heights.length - 1];
+      // Every kink of the y-profile that lies strictly INSIDE the ±ry slab must be a Y_KNOT — for an
+      // aperture asymmetric in v (odd blade counts) that includes its own v-extremes, where the width hits
+      // zero inside the slab (missing these measured 3.1e-2 on a rotated pentagon; with them: ~5e-4).
+      const yKnots = heights.filter((h) => Math.abs(h) < ry - 1e-9 * R);
+      return {
+        rx, ry, glOrder: 8, nSub: 2, yKnots,
+        fns: `
+fn row_bounds(v : f32) -> vec2<f32> {
+  var xl : f32 = ${lit(-rx)};
+  var xr : f32 = ${lit(rx)};
+${boundLines}
+  return vec2<f32>(xl, xr);
+}
+fn k_xcum(u : f32, v : f32) -> f32 {
+  let b = row_bounds(v);
+  // zero outside the polygon's own v-range: the slab is symmetric ±RY, the aperture need not be, and the
+  // edge lines extend past their segments
+  let inRange = v > ${lit(minV)} && v < ${lit(maxV)};
+  return select(0.0, max(clamp(u, b.x, b.y) - b.x, 0.0) * ${lit(invA)}, inRange);
+}
+fn k_ycdf(v : f32) -> f32 {
+  var m : f32 = 0.0;
+${cdfLines}
+  return m * ${lit(invA)};
+}
+// Guard stand-in, same rationale as the disc's: separable smoothstep on sub-4px instances.
+fn scdf(t : f32) -> f32 {
+  let s = clamp(t * ${lit(1 / (rx + ry))} + 0.5, 0.0, 1.0);
+  return s * s * (3.0 - 2.0 * s);
+}
+fn k_cell(u0 : f32, u1 : f32, v0 : f32, v1 : f32) -> f32 {
+  return (scdf(u1) - scdf(u0)) * (scdf(v1) - scdf(v0));
+}`,
+        ref: {
+          density: (u, v) => {
+            if (v <= heights[0] || v >= heights[heights.length - 1]) return 0;
+            const [xl, xr] = rowBounds(v);
+            return u > xl && u < xr ? invA : 0;
+          },
+          xcum: (u, v) => {
+            if (v <= heights[0] || v >= heights[heights.length - 1]) return 0;
+            const [xl, xr] = rowBounds(v);
+            return Math.max(Math.max(xl, Math.min(xr, u)) - xl, 0) * invA;
+          },
+          ycdf: jsYcdf,
+        },
+      };
+    },
+  },
 };
 
 // The inline default block in windfoil-ext.wgsl is tent; regenerate it here so splicing is uniform (and so
@@ -311,21 +423,25 @@ fn kpdf(t : f32) -> f32 {
 }`);
 
 /**
- * Resolve a kernel name (with optional '=param', e.g. 'mblur=12', 'disc=2') to its full spec:
- * { name, rx, ry, glOrder, yKnots, xSplits, fns, ref, blurb, core? }.
+ * Resolve a kernel name (with optional '=params', e.g. 'mblur=12', 'disc=2', 'iris=3,5,18') to its full
+ * spec: { name, rx, ry, glOrder, yKnots, xSplits, fns, ref, blurb, core? }.
  */
 export function resolveKernel(spec = 'box') {
-  const [name, paramRaw] = String(spec).split('=');
+  const str = String(spec);
+  const eq = str.indexOf('='); // first '=' only — the params themselves are a comma list
+  const name = eq < 0 ? str : str.slice(0, eq);
+  const paramRaw = eq < 0 ? undefined : str.slice(eq + 1);
   const k = KERNELS[name];
   if (!k) {
     throw new Error(`unknown kernel "${name}" — available: ${Object.keys(KERNELS).join(', ')}`);
   }
   if (k.make) {
-    const p = paramRaw === undefined ? k.param.default : Number(paramRaw);
+    const parts = paramRaw === undefined ? [] : paramRaw.split(',').map(Number);
+    const p = parts.length ? parts[0] : k.param.default;
     if (!Number.isFinite(p) || p < k.param.min) {
       throw new Error(`kernel "${name}" needs ${k.param.name} ≥ ${k.param.min}, got "${paramRaw}"`);
     }
-    return { name: spec, blurb: k.blurb, ...k.make(p) };
+    return { name: spec, blurb: k.blurb, ...k.make(p, ...parts.slice(1)) };
   }
   if (paramRaw !== undefined) throw new Error(`kernel "${name}" takes no parameter`);
   return { name, ...k };

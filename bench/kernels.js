@@ -303,10 +303,11 @@ for (const which of SCENES) {
     } else if (which === 'glyphs') {
       await montageStrip(scene, { name: 'glyphs_0013px', emPx: 13, crop: 250, kernels: KERNEL_LIST });
       await montageStrip(scene, { name: 'glyphs_0032px', emPx: 32, crop: 250, kernels: KERNEL_LIST });
-      // the analytic-effects strip: motion blur lengths and bokeh radii on readable text
+      // the analytic-effects strip: motion blur, round bokeh, and shaped (N-blade iris) bokeh — same
+      // radius for disc vs iris so the aperture SHAPE is the only difference
       await montageStrip(scene, {
         name: 'glyphs_0064px_effects', emPx: 64, crop: 250,
-        kernels: ['box', 'mblur=6', 'mblur=16', 'disc=2', 'disc=4'],
+        kernels: ['box', 'mblur=12', 'disc=4', 'iris=4', 'iris=4,5,18'],
       });
     } else if (which === 'tiger') {
       await montageStrip(scene, { name: 'tiger_0256px', emPx: 256, crop: 250, kernels: KERNEL_LIST });

@@ -67,6 +67,10 @@ const CASES = [
   ['catmullrom', [{}]],
   ['disc=1.5', [{}, { nSub: 3 }]],
   ['disc=3', [{}]],
+  ['iris=1.5', [{}]],
+  ['iris=3', [{}]],
+  ['iris=3,5,18', [{}]],
+  ['iris=3,3', [{}]],
 ];
 
 console.log(`kernel-tune · worst |ΔF| per piece vs GL-8×32 reference · ${TRIALS} random + 244 adversarial pieces`);
