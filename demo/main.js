@@ -67,7 +67,9 @@ const LINES = makeLines(N_LINES);
 // `(x, y)` is the world point under the screen center. Resize-robust (a resize only moves the W/2,H/2 offset,
 // not what you're looking at) and makes zoom-about-cursor trivial. The user-facing "zoom level" is z / dpr.
 // ---------------------------------------------------------------------------------------------------
-const cam = { x: 0, y: 0, z: 1 };
+const cam = { x: 0, y: 0, z: 1 }; // the input TARGET — pointer/gesture/wheel handlers write this
+const view = { x: 0, y: 0, z: 1 }; // the RENDERED camera — eased toward `cam` only during a gesture's opening
+let attackT = -Infinity; // performance.now() the current gesture began; camera smoothing fades out ~ATTACK_MS after
 let dpr = 1;
 let W = 1; // canvas backing-store px
 let H = 1;
@@ -80,7 +82,7 @@ let velX = 0;
 let velY = 0;
 let dragging = false;
 
-const zoomLevel = () => cam.z / dpr; // world-units-per-CSS-px → the number shown in the HUD
+const zoomLevel = () => view.z / dpr; // world-units-per-CSS-px → the number shown in the HUD (what's on screen)
 function clampZoom(z) {
   return Math.max(MIN_ZOOM * dpr, Math.min(MAX_ZOOM * dpr, z));
 }
@@ -113,13 +115,14 @@ function recenter() {
 // The camera as the shader's uniform: device px = worldPx · (z, z) + (transX, transY), where the translate
 // folds in both the pan (−z·cam) and the screen-center offset (W/2, H/2).
 function cameraUniform() {
-  return [cam.z, cam.z, W / 2 - cam.z * cam.x, H / 2 - cam.z * cam.y];
+  return [view.z, view.z, W / 2 - view.z * view.x, H / 2 - view.z * view.y];
 }
 
 // ---------------------------------------------------------------------------------------------------
 // Sizing — keep the backing store at device resolution; capped dpr keeps the fill-rate sane on retina.
 // ---------------------------------------------------------------------------------------------------
 let canvas;
+let rect = { left: 0, top: 0, width: 1, height: 1 }; // cached canvas bounds — refreshed on resize, not per event
 function resize() {
   dpr = Math.min(globalThis.devicePixelRatio || 1, 2);
   W = Math.max(1, Math.round(canvas.clientWidth * dpr));
@@ -127,14 +130,15 @@ function resize() {
   canvas.width = W;
   canvas.height = H;
   cam.z = clampZoom(cam.z); // a smaller window can push us past the zoom floor/ceiling
+  rect = canvas.getBoundingClientRect();
 }
 
-// Map a pointer/wheel event to device px (handles CSS sizing + dpr in one shot).
+// Map a pointer/wheel event to device px (handles CSS sizing + dpr in one shot). Uses the cached rect so we
+// don't force a synchronous layout on every pointermove (that reflow can itself jank a fast drag on mobile).
 function devicePos(e) {
-  const r = canvas.getBoundingClientRect();
   return {
-    x: (e.clientX - r.left) * (canvas.width / r.width),
-    y: (e.clientY - r.top) * (canvas.height / r.height),
+    x: (e.clientX - rect.left) * (canvas.width / rect.width),
+    y: (e.clientY - rect.top) * (canvas.height / rect.height),
   };
 }
 
@@ -149,11 +153,15 @@ function installInput() {
 
   canvas.addEventListener("pointerdown", (e) => {
     canvas.setPointerCapture(e.pointerId);
+    const first = pointers.size === 0;
     pointers.set(e.pointerId, devicePos(e));
     pinchPrev = null;
     dragging = true;
     velX = velY = 0; // a new touch stops any ongoing glide (tap-to-stop, like native scroll views)
     lastMoveT = performance.now();
+    // Arm the fading camera smoother on a *touch* gesture's first finger (see the rAF loop). Mouse/trackpad
+    // have no landing jitter, so leave them crisp 1:1 (attackT stays in the past → the smoothing weight is 1).
+    if (first && e.pointerType !== "mouse") attackT = lastMoveT;
   });
   canvas.addEventListener("pointermove", (e) => {
     if (!pointers.has(e.pointerId)) return;
@@ -163,7 +171,7 @@ function installInput() {
     if (pointers.size === 1) {
       const dx = p.x - prev.x;
       const dy = p.y - prev.y;
-      panBy(dx, dy);
+      panBy(dx, dy); // move the target 1:1 — the rAF loop smooths the rendered view only during the opening
       // Track a smoothed pointer velocity (device px per ms) so a flick keeps gliding after release.
       const t = performance.now();
       const dt = t - lastMoveT;
@@ -207,6 +215,7 @@ function installInput() {
     nativeGesture = true;
     pinchPrev = null;
     velX = velY = 0;
+    attackT = performance.now(); // a pinch is a fresh gesture too — fade-smooth its opening
     const p = devicePos(e);
     gPrev = { scale: e.scale || 1, x: p.x, y: p.y };
   });
@@ -234,6 +243,17 @@ function installInput() {
     },
     { passive: false },
   );
+
+  // iOS: even with `touch-action: none`, Safari still runs its own scroll/overscroll recognizer for the first
+  // moments of a *fast* swipe — which is why a slow "touch, pause, then drag" is smooth but a quick flick
+  // judders (the browser is contesting the gesture and delivers pointer events late/bunched until it yields).
+  // preventDefault on single-finger touches claims the gesture immediately, so the pointermoves arrive clean.
+  // Two-finger touches are left alone so the native pinch (the gesture* handlers above) still runs.
+  const swallowTouch = (e) => {
+    if (e.touches.length === 1) e.preventDefault();
+  };
+  canvas.addEventListener("touchstart", swallowTouch, { passive: false });
+  canvas.addEventListener("touchmove", swallowTouch, { passive: false });
 
   document.getElementById("hint").textContent = "pan & zoom around";
   globalThis.addEventListener("resize", resize);
@@ -297,6 +317,9 @@ async function main() {
 
   resize();
   recenter();
+  view.x = cam.x; // start the rendered camera exactly on the target (no ease-in from the default view)
+  view.y = cam.y;
+  view.z = cam.z;
   installInput();
 
   const [br, bg, bb, ba] = BG;
@@ -310,13 +333,20 @@ async function main() {
   let fpsDt = FRAME_MS; // EMA of the interval between rendered frames; we average the interval THEN invert it
   //                       (not an EMA of 1000/dt, which Jensen-biases the readout above the true frame rate).
   let prevTs = 0;
+
+  // Fade-out camera smoothing: for a gesture's opening ~ATTACK_MS, ease the rendered `view` toward the input
+  // `cam`, with a strength that decays to nothing — after that, view == cam (exact 1:1). This low-passes the
+  // jittery first frames of a touch pan/pinch (iOS delivers events unevenly against the 120Hz render clock);
+  // it does NOT keep smoothing steady-state motion. Mouse/wheel never arm it, so desktop stays crisp.
+  const ATTACK_MS = 300; // how long the opening smoothing lasts before it has fully faded to 1:1
+  const SMOOTH_K = 0.3; // per-60Hz-frame catch-up at full strength (smaller = smoother, softer opening)
   function frame(now) {
     requestAnimationFrame(frame);
 
     const dt = prevTs ? now - prevTs : FRAME_MS;
     prevTs = now;
     fpsDt = fpsDt * 0.9 + dt * 0.1;
-    const fps = Math.round(1000 / fpsDt); // honest average — reads ~120 mid-touch on ProMotion, ~60 idle
+    const fps = Math.min(60, Math.round(1000 / fpsDt)); // honest average, shown capped at 60 (won't read >60)
 
     // Kinetic panning: after a flick, keep gliding and ease to a stop. The decay is per-ms so it feels the
     // same regardless of frame interval; below a hair of a pixel per frame we snap to rest.
@@ -326,6 +356,20 @@ async function main() {
       velX *= decay;
       velY *= decay;
       if (Math.abs(velX) < 0.002 && Math.abs(velY) < 0.002) velX = velY = 0;
+    }
+
+    // Ease the rendered `view` toward the input `cam`, fading the smoothing out over the gesture's opening.
+    const s = now - attackT >= ATTACK_MS ? 0 : 1 - (now - attackT) / ATTACK_MS; // 1 at finger-down → 0 by ATTACK_MS
+    if (s > 0) {
+      const k = 1 - s * (1 - SMOOTH_K); // per-60Hz-frame catch-up: SMOOTH_K (strong) → 1 (none) as it fades
+      const kf = 1 - Math.pow(1 - k, dt / FRAME_MS); // frame-rate-normalized so 60/120Hz feel the same
+      view.x += (cam.x - view.x) * kf;
+      view.y += (cam.y - view.y) * kf;
+      view.z *= Math.pow(cam.z / view.z, kf); // zoom eases in log space (it's multiplicative)
+    } else {
+      view.x = cam.x; // past the attack window → exact 1:1, zero added lag
+      view.y = cam.y;
+      view.z = cam.z;
     }
 
     renderer.setUniforms({

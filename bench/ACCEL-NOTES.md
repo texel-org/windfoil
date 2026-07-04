@@ -64,6 +64,9 @@ not default.
   live values cost more than the skipped scans save.
 - **Flat-interpolated instance data**: −6…−9% across the board on Apple TBDR — interpolator/register cost
   beats the well-cached per-fragment storage read.
+- **`select`-flattened saturation tests in `mono_root`**: replacing the rising/falling early-out branch nest
+  with two `select`-ed comparisons cost ~25% at 8px (both comparison pairs always evaluate, and the cheap
+  early-outs become data dependencies) — in the hottest function, branches that skip work beat branchless.
 - (Earlier: straight-piece fast path — `mono_root` already skips the sqrt for lines.)
 
 Pattern: anything added to the hot loop costs everywhere. Wins either remove work uniformly (pad, fwidth)

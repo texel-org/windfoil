@@ -8,3 +8,7 @@ node_modules
 deno.lock
 output/
 .claude/
+
+# Self-signed TLS cert for `deno task serve:https` (local dev only)
+cert.pem
+key.pem

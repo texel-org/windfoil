@@ -177,18 +177,18 @@ wobbling by ~`ULP(coordinate)·zoom` from the `curve − rc` evaluation (see §8
 
 ## 7. Map to the code
 
-| concept                                                                   | where                                                           |
-| ------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| split curves into xy-monotone pieces                                      | [`src/geometry.js`](../src/geometry.js)                         |
-| file pieces into row bands, build the deduped atlas (§6)                  | [`src/bands.js`](../src/bands.js)                               |
-| `mono_root` — single-branch monotone quadratic solve                      | [`src/windfoil.wgsl`](../src/windfoil.wgsl)                     |
-| `integrate_inside` — exact midpoint rule for the INSIDE zone              | `src/windfoil.wgsl`                                             |
-| `integrate_piece` — the LEFT / INSIDE / RIGHT zone split                  | `src/windfoil.wgsl`                                             |
-| `integrate_band` — sum `A_e` over one band's pieces, with the early break | `src/windfoil.wgsl`                                             |
-| `integrate_face` — select + read the row bands a pixel touches (§6)       | `src/windfoil.wgsl`                                             |
-| minification guard — banded ink profile for instances ≤ a few px (§8)     | `src/windfoil.wgsl` (`MINIFICATION_GUARD`), `src/bands.js` (per-band areas) |
-| `fs` — normalize `F` and fold (nonzero / even-odd)                        | `src/windfoil.wgsl`                                             |
-| instanced quad + per-glyph band table                                     | `src/windfoil.wgsl` (`vs`), [`src/layout.js`](../src/layout.js) |
+| concept                                                                   | where                                                                       |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| split curves into xy-monotone pieces                                      | [`src/geometry.js`](../src/geometry.js)                                     |
+| file pieces into row bands, build the deduped atlas (§6)                  | [`src/bands.js`](../src/bands.js)                                           |
+| `mono_root` — single-branch monotone quadratic solve                      | [`src/windfoil.wgsl`](../src/windfoil.wgsl)                                 |
+| `integrate_inside` — exact midpoint rule for the INSIDE zone              | `src/windfoil.wgsl`                                                         |
+| `integrate_piece` — the LEFT / INSIDE / RIGHT zone split                  | `src/windfoil.wgsl`                                                         |
+| `integrate_band` — sum `A_e` over one band's pieces, with the early break | `src/windfoil.wgsl`                                                         |
+| `integrate_face` — select + read the row bands a pixel touches (§6)       | `src/windfoil.wgsl`                                                         |
+| `profile_face` — the guard's banded ink profile, instances ≤ a few px (§8) | `src/windfoil.wgsl` (`MINIFICATION_GUARD`), `src/bands.js` (per-band areas) |
+| `fs` / `fold_shade` — normalize `F`, fold (nonzero / even-odd), style     | `src/windfoil.wgsl`                                                         |
+| instanced quad + per-glyph band table                                     | `src/windfoil.wgsl` (`vs`), [`src/layout.js`](../src/layout.js)             |
 
 ---
 
@@ -257,7 +257,11 @@ the path is exact:
   its root branch by the sign of `a1` instead of evaluating the derivative.
 - **Measured and rejected** — exact in-shader band moments (two designs), band-level hull skips in the gather,
   and flat-interpolated instance data: all net-negative from register pressure / divergence; kept out.
-- **Pluggable filter kernels** — the gather generalized past the box filter (tent, truncated Gaussian, the
-  Mitchell–Netravali family, exact analytic motion blur, a bokeh disc) in a PARALLEL shader
-  (`src/windfoil-ext.wgsl`, specialized per kernel by `src/kernels.js`); this file's shader stays the untouched
-  box reference and the default path still loads it byte-for-byte. See [`KERNELS.md`](KERNELS.md).
+- **Simplification pass** — the shader deduplicated into named helpers (`fold_shade`, `profile_face`, the band
+  mapping/overlap helpers, `ROW_*` layout constants) and dead guards removed — verified byte-identical renders
+  and baseline-identical timings.
+- **Pluggable filter kernels** — the gather generalized past the box filter (tent, box blur, truncated
+  Gaussian, the Mitchell–Netravali family, exact analytic motion blur, bokeh disc and N-blade iris) in a
+  PARALLEL shader (`src/windfoil-ext.wgsl`, specialized per kernel by `src/kernels.js`); this file's shader
+  stays the untouched box reference and the default path still loads it byte-for-byte. See
+  [`KERNELS.md`](KERNELS.md).
