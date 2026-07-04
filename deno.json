@@ -2,7 +2,9 @@
   "tasks": {
     "render": "deno run --unstable-webgpu -A src/main.js",
     "validate": "deno run --unstable-webgpu -A tools/validate.js",
-    "serve": "deno run -A jsr:@std/http@^1/file-server --port 8080 ."
+    "serve": "deno run -A jsr:@std/http@^1/file-server --port 8080 .",
+    "cert": "deno run -A tools/gen-cert.js",
+    "serve:https": "deno run -A tools/gen-cert.js && deno run -A jsr:@std/http@^1/file-server --port 8080 --cert cert.pem --key key.pem ."
   },
   "imports": {
     "png-tools": "npm:png-tools@^1.0.4",
