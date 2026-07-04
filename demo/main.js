@@ -14,11 +14,8 @@
 import { parseFont } from "../src/font.js";
 import { buildGlyphAtlas } from "../src/bands.js";
 import { layoutStack } from "../src/layout.js";
-import {
-  loadShaderCode,
-  requestDevice,
-  createGlyphRenderer,
-} from "../src/gpu.js";
+import { requestDevice, createGlyphRenderer } from "../src/gpu.js";
+import { loadKernelShaderCode } from "../src/kernels.js";
 
 const INK = [12, 15, 28, 0xff].map((x) => x / 0xff); // near-black ink
 // const BG = [233, 227, 213, 0xff].map((x) => x / 0xff); // warm off-white
@@ -280,10 +277,13 @@ async function main() {
     throw new Error("WebGPU is not available in this browser.");
 
   // Load the font bytes + shader source in parallel, then build the shared atlas and lay out the stack.
+  // ?kernel=<name> swaps the coverage filter (tent, gaussian, mitchell, mblur=8, disc=2, … — see
+  // src/kernels.js); the default stays the plain box shader, untouched.
+  const kernel = new URLSearchParams(location.search).get("kernel") ?? "box";
   const fontUrl = new URL("../assets/Lato-Regular.ttf", import.meta.url);
   const [fontBuf, code] = await Promise.all([
     fetch(fontUrl).then((r) => r.arrayBuffer()),
-    loadShaderCode(),
+    loadKernelShaderCode(kernel),
   ]);
   const font = parseFont(fontBuf);
 

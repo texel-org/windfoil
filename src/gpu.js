@@ -116,12 +116,13 @@ export function createGlyphRenderer(device, { code, format, curves, rows, instan
  * @param {Float32Array} o.curves    @param {Uint32Array} o.rows    @param {Float32Array} o.instances
  * @param {number} o.instanceCount
  * @param {[number, number]} [o.style] coverage-style (gamma, sharp); [1, 1] = exact (identity)
+ * @param {string} [o.code] WGSL source override (e.g. a kernel shader from src/kernels.js); defaults to windfoil
  * @returns {Promise<Uint8Array>} width*height*4 RGBA8, straight alpha
  */
-export async function renderToRGBA({ width, height, background, curves, rows, instances, instanceCount, style = [1, 1] }) {
+export async function renderToRGBA({ width, height, background, curves, rows, instances, instanceCount, style = [1, 1], code }) {
   const device = await requestDevice();
   const format = 'rgba8unorm';
-  const code = await loadShaderCode();
+  code = code ?? await loadShaderCode();
 
   const target = device.createTexture({
     size: [width, height],

@@ -35,10 +35,12 @@ This README was written by me, but most of the code and other documentation in t
 
 - [`docs/ALGORITHM.md`](docs/ALGORITHM.md) — the algorithm
 - [`docs/NOTES.md`](docs/NOTES.md) — some additional properties of the algorithm I've found interesting for my own uses
+- [`docs/KERNELS.md`](docs/KERNELS.md) — pluggable filter kernels (tent, box blur, Gaussian, Mitchell–Netravali, analytic motion blur, bokeh disc and N-blade iris) on top of the same gather; the box default stays the untouched reference shader, and the kernel shader doubles as the exactness reference (no minification guard)
 - [`src/windfoil.wgsl`](src/windfoil.wgsl) — the shader: the winding-integral box filter + the row-band gather
+- [`src/windfoil-ext.wgsl`](src/windfoil-ext.wgsl) + [`src/kernels.js`](src/kernels.js) — the kernel-generalized shader and the registry that specializes it per kernel
 - [`src/bands.js`](src/bands.js) — the row-band acceleration structure
 - [`src/font.js`](src/font.js) — glyph outlines + metrics from the bundled font (using opentype.js)
-- [`bench/`](bench/README.md) — a windfoil-vs-Slug WebGPU benchmarks and acceleration notes
+- [`bench/`](bench/README.md) — a windfoil-vs-Slug WebGPU benchmarks and acceleration notes (`bench/kernels.js` prices the kernels against the box baseline)
 
 ## How This Came About
 

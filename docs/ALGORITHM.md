@@ -255,6 +255,13 @@ the path is exact:
 - **Fragment-cost trims** — the AA skirt pad tightened 2px → 1px (coverage reaches only half a pixel past the
   ink; the pad ring dominates small instances), the footprint moved to `fwidth` (no sqrt), and `mono_root` picks
   its root branch by the sign of `a1` instead of evaluating the derivative.
+- **Measured and rejected** — exact in-shader band moments (two designs), band-level hull skips in the gather,
+  and flat-interpolated instance data: all net-negative from register pressure / divergence; kept out.
 - **Simplification pass** — the shader deduplicated into named helpers (`fold_shade`, `profile_face`, the band
   mapping/overlap helpers, `ROW_*` layout constants) and dead guards removed — verified byte-identical renders
   and baseline-identical timings.
+- **Pluggable filter kernels** — the gather generalized past the box filter (tent, box blur, truncated
+  Gaussian, the Mitchell–Netravali family, exact analytic motion blur, bokeh disc and N-blade iris) in a
+  PARALLEL shader (`src/windfoil-ext.wgsl`, specialized per kernel by `src/kernels.js`); this file's shader
+  stays the untouched box reference and the default path still loads it byte-for-byte. See
+  [`KERNELS.md`](KERNELS.md).

@@ -90,6 +90,10 @@ Wire-up: coarse cell grid with per-cell `[curveStart, count]` + `W`, read in `in
 
 ## Box Blur
 
+> **Status:** built through the kernel interface — `boxblur=D` in [`KERNELS.md`](KERNELS.md) (exact, GL-2).
+> The in-place `sEff = s·blur` trick below remains open for the CORE shader, where it would keep the
+> minification guard and band selection intact instead of compiling a second pipeline.
+
 A box filter over a **wider** box is a box blur, and the gather already computes an exact box filter over the
 footprint `s`. So scale `s` up before the gather: `k` device px → a `k`px blur, no second sample or SDF, same
 path. Edges ramp over `k`px, sub-`k` stems dim to the ink average, consistent width at any zoom.
@@ -101,6 +105,14 @@ Restore: `sEff = s * blur` (diameter in device px, 1 = off) into the guard and `
 a uniform so fill stays `sEff == s`.
 
 ## Filter Kernels
+
+> **Status:** built — see [`KERNELS.md`](KERNELS.md). The sketch below became `src/windfoil-ext.wgsl` +
+> `src/kernels.js`: tent (exact), truncated Gaussian, the Mitchell–Netravali family, exact analytic motion
+> blur, and a non-separable bokeh disc, each a spliced shader specialization so the box default keeps loading
+> the untouched `windfoil.wgsl`. Two things the sketch under-called: the y-side knots must split *pieces*, not
+> integration windows (window splits re-scan far curves and cost 54× at small text), and "closed-form per
+> piece" is best realized as knot-split Gauss–Legendre (exact for polynomial kernels, and composite slicing
+> rescues the smooth ones from steep-piece under-resolution).
 
 Nothing in §2 assumes the footprint weight is uniform — it filters the winding number by any kernel `k(x,y)`.
 With the horizontal cumulative `Φ(x,y) = ∫_{−∞}^{x} k(u,y) du`:
