@@ -111,8 +111,8 @@ export async function buildTigerScene({ emWorld, extent, color = null }) {
     count, center: { x: 0, y: 0 }, worldSpan: 2 * extent,
     stats: {
       shapes: shapes.length, rawCurves, monoPieces,
-      wBands: wRows.length / 2, wBanded: wCurves.length / 6,
-      sBands: sRows.length / 2, sBanded: sCurves.length / 6,
+      wBands: wRows.length / 5, wBanded: wCurves.length / 6,
+      sBands: sRows.length / 5, sBanded: sCurves.length / 6,
       tiles: count / shapes.length,
     },
   };

@@ -99,8 +99,8 @@ export function buildShapeScene({ emWorld, extent, fillRule = 0, color = INK }) 
     count, center: { x: 0, y: 0 }, worldSpan: 2 * extent, fillRule,
     stats: {
       quads: quads.length / 6,
-      wBands: wRows.length / 2, wBanded: wCurves.length / 6,
-      sBands: sRows.length / 2, sBanded: sCurves.length / 6,
+      wBands: wRows.length / 5, wBanded: wCurves.length / 6,
+      sBands: sRows.length / 5, sBanded: sCurves.length / 6,
     },
   };
 }

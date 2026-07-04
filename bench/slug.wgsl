@@ -53,7 +53,7 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VsO
   let I = instances[ii];
   let unitsToPx = I.place.z;
   let camScale = U.cam.xy;
-  let pad = 2.0 / (unitsToPx * max(camScale.x, 1e-6));
+  let pad = 1.0 / (unitsToPx * max(camScale.x, 1e-6)); // 1px AA skirt — see windfoil.wgsl vs()
   let lo = I.bbox.xy - vec2<f32>(pad);
   let hi = I.bbox.zw + vec2<f32>(pad);
   let uv = vec2<f32>(f32(vi & 1u), f32((vi >> 1u) & 1u));
@@ -142,7 +142,7 @@ fn gather_ray(rc : vec2<f32>, band : vec4<f32>, invDiam : f32, half : f32) -> ve
   if (invH > 0.0 && R > 1u) {
     bi = u32(clamp(floor((rc.y - y0) * invH), 0.0, f32(R) - 1.0));
   }
-  let rIdx = (rowBase + bi) * 2u;
+  let rIdx = (rowBase + bi) * 5u; // rows are [start, count, area, xMin, xMax] — the f32s are windfoil-only
   let start = rows[rIdx];
   let count = rows[rIdx + 1u];
 
@@ -176,15 +176,8 @@ fn shade(color : vec4<f32>, cov : f32) -> vec4<f32> {
 fn fs(in : VsOut) -> @location(0) vec4<f32> {
   let I = instances[in.inst];
   let rc = in.rc;
-  // units_per_pixel per axis, from the screen-space gradient (same footprint measure as windfoil; for the
-  // axis-aligned camera here this equals the reference's fwidth-based pixelsPerEm).
-  let s = max(
-    vec2<f32>(
-      length(vec2<f32>(dpdx(rc.x), dpdy(rc.x))),
-      length(vec2<f32>(dpdx(rc.y), dpdy(rc.y))),
-    ),
-    vec2<f32>(1e-9),
-  );
+  // units_per_pixel per axis — fwidth, exactly the reference SlugPixelShader's emsPerPixel measure.
+  let s = max(fwidth(rc), vec2<f32>(1e-9));
 
   // Dual ray → dual (coverage, weight): horizontal in the plain frame, vertical in the rotated frame.
   let xc = gather_ray(rc, I.hband, 1.0 / s.x, s.x * 0.5);                     // (xcov, xwgt)

@@ -84,7 +84,7 @@ export function buildSlugAtlas(font, text) {
     stats: {
       uniqueGlyphs: Object.keys(table).length,
       curves: curveTotal, // whole quads per glyph, summed over unique glyphs
-      bandCount: rows.length / 2,
+      bandCount: rows.length / 5,
       bandedPieces, // after y- and x-duplication across both band sets
       duplication: curveTotal ? bandedPieces / (curveTotal * 2) : 1, // vs 2× (both band sets)
     },

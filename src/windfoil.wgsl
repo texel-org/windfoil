@@ -23,20 +23,24 @@ struct Instance {
 // see the tuning note there (8 = the median band occupancy for the Lato glyph set).
 const SORT_MIN : u32 = 8u;
 
-// when a glyph shrinks below ~1px, every pixel's footprint spans the entire glyph, so the gather integrates
-// all of its curves at every pixel and per-pixel cost begins to peak. You could cull these entirely, or just
-// compute a rough coverage from the area of the glyph contours. This could be per-glyph for correctness, or
-// you can use a rough average (or a uniform that changes per icon set for example). This number roughly sits
-// in an average across alphanumeric glyphs of the current font set, so for a more exact AA at small sizes, you
-// may wish to tune this.
+// When a glyph shrinks to a few pixels, every pixel's footprint spans most of its bands, so the gather
+// integrates nearly all of its curves at every pixel and per-pixel cost peaks — while the text is far too
+// small to read, so exactness buys nothing. Below GUARD_PX device pixels (whole glyph, both axes) the guard
+// swaps the gather for a banded ink profile: each band's EXACT winding integral ∫∫_strip w dA is precomputed
+// at atlas build (one f32 riding in the row table) and the pixel takes its y-overlap share of each band,
+// spread uniformly across the ink box in x. Sub-pixel glyphs resolve to their true average coverage; at 2–4
+// px the vertical ink distribution (stems, bowls, baselines) survives and only the x-profile flattens. The
+// branch is per-instance-per-zoom (warp-coherent), and the path is a few band taps — no curve reads at all.
 const MINIFICATION_GUARD = true;
-const INK_AVERAGE = 0.42;
+const GUARD_PX = 3.0;
 
 @group(0) @binding(0) var<uniform> U : Uniforms;
 @group(0) @binding(1) var<storage, read> instances : array<Instance>;
 // The deduped, band-duplicated curve atlas: three consecutive vec2 per xy-monotone piece (endpoints + control).
 @group(0) @binding(2) var<storage, read> curves : array<vec2<f32>>;
-// Row-band table: a flat [start, count] pair per band, indexing into `curves`.
+// Row-band table: a flat [start, count, areaBits, xMinBits, xMaxBits] quintuple per band — start/count
+// index into `curves`; the bit-punned f32s are the band's precomputed winding integral (the minification
+// guard's ink profile) and its piece hull in x (band-level skip tests). See bands.js.
 @group(0) @binding(3) var<storage, read> rows : array<u32>;
 
 struct VsOut {
@@ -50,9 +54,11 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VsO
   let I = instances[ii];
   let unitsToPx = I.place.z;                          // device pixels per glyph coordinate unit
   let camScale = U.cam.xy;                            // world→device px scale (camera zoom); (1,1) = identity
-  // Pad the quad outward by ~2 device px so an edge's anti-aliased skirt is never clipped. The pad is in
-  // glyph units, so divide by the ON-SCREEN scale (unitsToPx·camScale) to keep it ~2 device px at any zoom.
-  let pad = 2.0 / (unitsToPx * max(camScale.x, 1e-6));
+  // Pad the quad outward by 1 device px so an edge's anti-aliased skirt is never clipped: coverage reaches
+  // at most half a pixel past the ink (the box filter's half-width), so 1px is 2× margin. The pad is in
+  // glyph units, so divide by the ON-SCREEN scale (unitsToPx·camScale) to keep it 1 device px at any zoom.
+  // Keeping it tight matters at minification, where the pad ring is a large share of the fragments.
+  let pad = 1.0 / (unitsToPx * max(camScale.x, 1e-6));
   let lo = I.bbox.xy - vec2<f32>(pad);
   let hi = I.bbox.zw + vec2<f32>(pad);
   // Unit-quad corners for a triangle-strip: (0,0) (1,0) (0,1) (1,1).
@@ -213,10 +219,10 @@ fn integrate_band(start : u32, count : u32, rc : vec2<f32>, wlo : f32, whi : f32
 // y-slab selects the band range it touches; each band is read clipped to its own y-range. The bands tile
 // the slab, so a piece duplicated across adjacent bands integrates over disjoint windows and the sum is
 // exact without a dedupe test.
-fn integrate_face(I : Instance, rc : vec2<f32>, s : vec2<f32>) -> f32 {
-  let rowBase = u32(I.band.x);
-  let R = u32(I.band.y);
-  let invH = I.band.w;
+fn integrate_face(band : vec4<f32>, rc : vec2<f32>, s : vec2<f32>) -> f32 {
+  let rowBase = u32(band.x);
+  let R = u32(band.y);
+  let invH = band.w;
 
   // Build the slab rc-RELATIVE ([−sy2, +sy2]). At deep zoom on far-from-origin coordinates sy/2 drops below
   // ULP(rc.y), so an absolute slab (rc.y ± sy2, then − rc.y) would quantize to zero height and drop whole
@@ -224,7 +230,7 @@ fn integrate_face(I : Instance, rc : vec2<f32>, s : vec2<f32>) -> f32 {
   // the boundary clips, whose ULP wobble just nudges the split between adjacent (still exactly tiling)
   // windows. See docs/ALGORITHM.md §6.
   let sy2 = s.y * 0.5;
-  let dy0 = I.band.z - rc.y;      // band origin y0, relative to the pixel center
+  let dy0 = band.z - rc.y;      // band origin y0, relative to the pixel center
   var ri0 : u32 = 0u;
   var ri1 : u32 = 0u;
   if (invH > 0.0 && R > 1u) {
@@ -241,7 +247,7 @@ fn integrate_face(I : Instance, rc : vec2<f32>, s : vec2<f32>) -> f32 {
       w_hi = min(w_hi, dy0 + (f32(ri) + 1.0) / invH);
     }
     if (w_hi <= w_lo) { continue; }
-    let rIdx = (rowBase + ri) * 2u;
+    let rIdx = (rowBase + ri) * 5u;
     f_int += integrate_band(rows[rIdx], rows[rIdx + 1u], rc, w_lo, w_hi, s.x);
   }
   return f_int;
@@ -257,43 +263,58 @@ fn shade(color : vec4<f32>, cov : f32) -> vec4<f32> {
 fn fs(in : VsOut) -> @location(0) vec4<f32> {
   let I = instances[in.inst];
   let rc = in.rc;
-  // units_per_pixel: the length of each axis' screen-space gradient — under pure scale/translation this
-  // makes the integration box exactly the device pixel's preimage.
-  let s = max(
-    vec2<f32>(
-      length(vec2<f32>(dpdx(rc.x), dpdy(rc.x))),
-      length(vec2<f32>(dpdx(rc.y), dpdy(rc.y))),
-    ),
-    vec2<f32>(1e-9),
-  );
+  // units_per_pixel from the screen-space gradients (fwidth = |∂/∂x| + |∂/∂y| per axis) — under pure
+  // scale/translation one term is zero and this is exactly the device pixel's preimage, with no sqrt.
+  let s = max(fwidth(rc), vec2<f32>(1e-9));
 
-  // improve performance by culling/averaging minified glyphs
+  // Minification guard: a glyph spanning ≤ GUARD_PX device pixels renders from its banded ink profile
+  // (precomputed exact band areas) instead of the full gather. See the constant's comment above.
   if (MINIFICATION_GUARD) {
-    // glyph size in font units
     let gw = I.bbox.z - I.bbox.x;
     let gh = I.bbox.w - I.bbox.y;
-    // if one pixel is bigger than the whole glyph,
-    // the letter is a sub-pixel smudge: coverage = ink area / window area
-    if (s.x >= gw && s.y >= gh) {
+    if (s.x * GUARD_PX >= gw && s.y * GUARD_PX >= gh) {
       let pixLo = rc - s * 0.5; // this pixel's box, in glyph units
       let pixHi = rc + s * 0.5;
-      let ovLo = max(pixLo, I.bbox.xy); // overlap of pixel box ∩ glyph bbox
-      let ovHi = min(pixHi, I.bbox.zw);
-      let ov   = max(ovHi - ovLo, vec2<f32>(0.0));
-      let cov  = clamp(INK_AVERAGE * ov.x * ov.y / (s.x * s.y), 0.0, 1.0);
-      return shade(I.color, cov);
+      let ovX = min(pixHi.x, I.bbox.z) - max(pixLo.x, I.bbox.x);
+      var f_apx : f32 = 0.0;
+      if (ovX > 0.0) {
+        let rowBase = u32(I.band.x);
+        let R = u32(I.band.y);
+        // header invH is 0 for a single band — the profile math wants the real 1/bandHeight
+        let invH = select(I.band.w, 1.0 / max(gh, 1e-30), I.band.w == 0.0);
+        let y0 = I.band.z;
+        var ri0 : u32 = 0u;
+        var ri1 : u32 = 0u;
+        if (R > 1u) {
+          ri0 = u32(clamp(floor((pixLo.y - y0) * invH), 0.0, f32(R) - 1.0));
+          ri1 = u32(clamp(floor((pixHi.y - y0) * invH), 0.0, f32(R) - 1.0));
+        }
+        var ink : f32 = 0.0; // Σ band winding area × the pixel's y-share of the band × its x-share of the
+        for (var ri = ri0; ri <= ri1; ri = ri + 1u) { //   band's own ink hull (letterforms survive in x)
+          let rIdx = (rowBase + ri) * 5u;
+          let b0 = y0 + f32(ri) / invH;
+          let b1 = y0 + f32(ri + 1u) / invH;
+          let ov = max(min(pixHi.y, b1) - max(pixLo.y, b0), 0.0);
+          let bx0 = bitcast<f32>(rows[rIdx + 3u]);
+          let bx1 = bitcast<f32>(rows[rIdx + 4u]);
+          let ovBX = max(min(pixHi.x, bx1) - max(pixLo.x, bx0), 0.0);
+          let fx = ovBX / max(bx1 - bx0, 1e-30);
+          ink += bitcast<f32>(rows[rIdx + 2u]) * (ov * invH) * fx;
+        }
+        f_apx = ink / (s.x * s.y);
+      }
+      var covA : f32;
+      if (I.place.w > 0.5) {
+        covA = clamp(tri_wave(f_apx), 0.0, 1.0);
+      } else {
+        covA = clamp(abs(f_apx), 0.0, 1.0);
+      }
+      return shade(I.color, style_coverage(covA, U.style.x, U.style.y));
     }
-    // for more performance gains:
-    // there is also a middle ground where the glyph is above some small speck, but still
-    // small enough that it has to scan more bands than is ideal, and we could provide
-    // a special case acceleration here, either using a baked asset or per-band moments (+2 floats per band)
-    // else if (s.y * I.band.y >= gh) {
-      // per-band moments or pre-rendered texture
-    // }
   }
 
   // One gather → the winding integral ∫∫_box w over the pixel box, normalized to coverage.
-  let f_cov = integrate_face(I, rc, s) / max(s.x * s.y, 1e-30);
+  let f_cov = integrate_face(I.band, rc, s) / max(s.x * s.y, 1e-30);
 
   var cov : f32;
   if (I.place.w > 0.5) {
