@@ -147,8 +147,9 @@ documented §4 limit: the winding fold deviates by ~0.1 at the crossings, compar
 
 On its own the integral is a per-pixel loop over every curve — fine for a glyph, useless for a scene. The
 acceleration structure fixes that ([`../src/bands.js`](../src/bands.js) builds it; `integrate_face` reads it):
-each shape's monotone pieces are filed into horizontal **row bands** over its y-extent (`~6` pieces per band),
-and a fragment reads only the bands its pixel's y-slab touches. Three properties, all from the integral
+each shape's monotone pieces are filed into horizontal **row bands** over its y-extent (`~10` pieces per band —
+benchmarked in [`../bench/README.md`](../bench/README.md)), and a fragment reads only the bands its pixel's
+y-slab touches. Three properties, all from the integral
 sweeping along `x` inside a horizontal slab:
 
 1. **One band axis, not two.** Integration is horizontal, so a row band holds everything a fragment needs — no
@@ -185,6 +186,7 @@ wobbling by ~`ULP(coordinate)·zoom` from the `curve − rc` evaluation (see §8
 | `integrate_piece` — the LEFT / INSIDE / RIGHT zone split                  | `src/windfoil.wgsl`                                             |
 | `integrate_band` — sum `A_e` over one band's pieces, with the early break | `src/windfoil.wgsl`                                             |
 | `integrate_face` — select + read the row bands a pixel touches (§6)       | `src/windfoil.wgsl`                                             |
+| minification guard — banded ink profile for instances ≤ a few px (§8)     | `src/windfoil.wgsl` (`MINIFICATION_GUARD`), `src/bands.js` (per-band areas) |
 | `fs` — normalize `F` and fold (nonzero / even-odd)                        | `src/windfoil.wgsl`                                             |
 | instanced quad + per-glyph band table                                     | `src/windfoil.wgsl` (`vs`), [`src/layout.js`](../src/layout.js) |
 
@@ -208,8 +210,13 @@ Honest weaknesses:
 - **Per-pixel cost** — a curve-crossed pixel does a few `sqrt`s vs one or two for ramp methods; more arithmetic
   than a heuristic, by design.
 - **Minification** — zoomed out, a footprint spans whole row bands so every curve integrates per pixel, costlier
-  than Slug's dual-ray. This repo guards with a cheap sub-pixel approximation; a proper fix is per-band moments
-  at +2 floats/band ([`NOTES.md`](NOTES.md) → Band Moments), if minification matters.
+  than Slug's dual-ray. Below the point where an instance is legible at all (whole glyph ≤ ~3.7 device px), the
+  shader switches to a **banded ink profile**: each band's exact winding integral and x-hull are precomputed at
+  atlas build and ride in the row table, so tiny glyphs render from a few table taps with no curve reads — their
+  true average coverage, y-resolved by band. That caps the worst case (~30× at a 2px em) while everything at
+  legible sizes stays the exact integral, bit-for-bit. The remaining gap to Slug at legible small text (8–64px)
+  is per-crossing arithmetic and is measured, with the ideas that did and didn't help, in
+  [`../bench/README.md`](../bench/README.md) and [`../bench/ACCEL-NOTES.md`](../bench/ACCEL-NOTES.md).
 
 ---
 

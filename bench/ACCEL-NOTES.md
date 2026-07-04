@@ -8,7 +8,7 @@ version lives in `README.md`; this is the long form.
 
 Machine: Apple GPU via Deno 2.x WebGPU (Metal). Numbers are relative and machine-specific.
 
-## 1. Where windfoil loses to Slug (from the benchmark)
+## 1. Where windfoil loses to Slug (round-1 state, before §9's guard)
 
 | regime | gap (slug faster) | why |
 | --- | --- | --- |
@@ -86,7 +86,7 @@ Conclusion: **an exact per-fragment moment cannot beat windfoil's plain gather i
 is real but the bloat + divergence swamp it. This is now confirmed from two independent designs (cells and
 prefix), so it's a property of the approach, not a tuning miss.
 
-## 6. The one path that could work — and its cost
+## 6. The mip hybrid — now the only remaining fix for the *legible* range
 
 To sidestep *both* bloat and divergence you need a **separate, cheaper shader selected per instance/zoom**, not a
 branch inside the coverage shader. Concretely, a **prefiltered coverage mip**:
@@ -175,7 +175,7 @@ Pattern intact: *anything* added to the per-piece/per-band hot path costs everyw
 remove work uniformly (pad, fwidth) or move whole instances onto a separate cheap path at coherent
 granularity (the guard).
 
-## 12. A correction to §the-earlier-notes' numerics claim
+## 12. A correction to an earlier numerics claim (Slug port)
 
 Earlier notes claimed the reference Slug's naïve root form `(b ∓ d)/a` is fine "because it works in
 normalized em space". That was wrong — floating point is scale-invariant, so em-normalization changes

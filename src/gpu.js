@@ -42,7 +42,7 @@ function storage(device, floats) {
  * @param {string} o.code            the WGSL source (see `loadShaderCode`)
  * @param {GPUTextureFormat} o.format the render target's format ('rgba8unorm' offscreen; the canvas preferred format live)
  * @param {Float32Array} o.curves    the deduped, band-duplicated curve atlas (3 vec2 per monotone piece)
- * @param {Uint32Array} o.rows       the row-band table ([start, count] per band)
+ * @param {Uint32Array} o.rows       the row-band table ([start, count, area, xMin, xMax] per band; see bands.js)
  * @param {Float32Array} o.instances packed instance data (16 floats each)
  * @param {number} o.instanceCount
  */

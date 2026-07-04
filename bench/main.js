@@ -1,16 +1,18 @@
 // bench/main.js — windfoil vs Slug, per-frame GPU time across a ladder of zoom levels, in Deno.
 //
-//   deno run --unstable-webgpu -A bench/main.js                    # both scenes: text grid + complex shape
+//   deno run --unstable-webgpu -A bench/main.js                    # all three scenes
 //   deno run --unstable-webgpu -A bench/main.js --scene glyphs     # just the text grid
 //   deno run --unstable-webgpu -A bench/main.js --scene shape --check
 //   deno run --unstable-webgpu -A bench/main.js --levels 4,16,64 --size 900
 //
-// Two scenes, each rendered by BOTH algorithms into the same offscreen target (only the coverage technique
+// Three scenes, each rendered by BOTH algorithms into the same offscreen target (only the coverage technique
 // differs — windfoil.wgsl vs bench/slug.wgsl):
 //   • glyphs — a dense grid of real text: sparse curves, ~1 edge per pixel. Slug's sweet spot.
 //   • shape  — one self-crossing shape of ~240 whole quadratics that all span the extent and overlap into a
 //              high-winding core: many edges per pixel, and packed bands full of FAR curves. windfoil's regime
 //              (it compares — doesn't solve — far curves, and reads one band axis vs Slug's two).
+//   • tiger  — a real SVG drawing (the Ghostscript tiger): 304 overlapping shapes with painter's-order
+//              overdraw, each shape one instance with its own bands.
 //
 // A "zoom level" is the on-screen size in device px (pixels-per-em): the camera scales the fixed world scene so
 // a unit is `emPx` tall. Each scene's grid is sized to fill the viewport at its smallest level; larger levels
@@ -217,9 +219,11 @@ async function runLadder(title, scene, levels) {
     );
   }
 
-  // Takeaway: windfoil's worst regime, its sub-pixel guard recovery, and the magnification crossover.
-  const GUARD_PX = 1.5;
-  const mid = rows.filter((r) => r.emPx > GUARD_PX && r.emPx <= 16);
+  // Takeaway: windfoil's worst regime, its minification-guard recovery, and the magnification crossover.
+  // Below ~GUARD-covered sizes (a whole glyph ≤ GUARD_PX ≈ 3.7 device px → glyph ems ≤ ~5px) windfoil renders
+  // from the banded ink profile; between that and ~16px is its remaining exact-path worst case.
+  const GUARDED_EM_PX = 5;
+  const mid = rows.filter((r) => r.emPx > GUARDED_EM_PX && r.emPx <= 16);
   const worst = mid.reduce((a, r) => (!a || r.s.perFrame / r.w.perFrame < a.s.perFrame / a.w.perFrame ? r : a), null);
   if (worst && worst.w.perFrame > worst.s.perFrame) {
     console.log(
@@ -227,10 +231,10 @@ async function runLadder(title, scene, levels) {
         `windfoil's footprint spans many bands, integrating many curves each.`,
     );
   }
-  const guard = rows.filter((r) => r.emPx <= GUARD_PX && r.w.perFrame < r.s.perFrame);
+  const guard = rows.filter((r) => r.emPx <= GUARDED_EM_PX && r.w.perFrame < r.s.perFrame);
   if (guard.length) {
     const g = guard[guard.length - 1];
-    console.log(`  sub-pixel: below ~1.4px windfoil's MINIFICATION_GUARD fires → windfoil ${(g.s.perFrame / g.w.perFrame).toFixed(1)}× faster at ${g.emPx}px.`);
+    console.log(`  illegible: at ≤${g.emPx}px windfoil's MINIFICATION_GUARD renders from the banded ink profile → ${(g.s.perFrame / g.w.perFrame).toFixed(1)}× faster than slug.`);
   }
   const mag = rows.filter((r) => r.emPx > 16);
   const cross = mag.find((r) => r.w.perFrame < r.s.perFrame);

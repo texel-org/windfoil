@@ -6,10 +6,10 @@ ladder of zoom levels. The two methods degrade differently with zoom, so a singl
 sweep is the point.
 
 ```sh
-deno run --unstable-webgpu -A bench/main.js                      # both scenes: text grid + complex shape
+deno run --unstable-webgpu -A bench/main.js                      # all three scenes
 deno run --unstable-webgpu -A bench/main.js --scene glyphs --check   # one scene + correctness/quality PNGs
 deno run --unstable-webgpu -A bench/main.js --scene shape --shape-fill evenodd
-deno run --unstable-webgpu -A bench/main.js --levels 1,1.5,2,4,16,64,256   # custom ladder (auto-densifies)
+deno run --unstable-webgpu -A bench/main.js --levels 1,1.5,2,4,16,64,256   # custom ladder
 ```
 
 Three scenes (`--scene glyphs,shape,tiger` in any combination, or `all` / `both`; default `all`):
@@ -19,7 +19,7 @@ Three scenes (`--scene glyphs,shape,tiger` in any combination, or `all` / `both`
   that all span the extent and pile into a high-winding core: many edges per pixel, bands packed with FAR
   curves. windfoil's intended regime.
 - **tiger** — an actual SVG drawing (the Ghostscript tiger, `fixtures/tiger-quadratics.json`): 304 overlapping
-  shapes / ~14k quadratics, real painter's-order **overdraw** (many shapes stack over the same pixels). Each
+  shapes / ~22k quadratics, real painter's-order **overdraw** (many shapes stack over the same pixels). Each
   shape is one instance with its own bands; the drawing is tiled to fill the viewport.
 
 Flags: `--size` (offscreen square, 720), `--levels` (comma px list — the on-screen height of the tiled unit;
@@ -98,7 +98,7 @@ clean) — purely this port's adaptation. `slug.wgsl` now folds to the shared ex
 `d == 0`, and the replica confirms bit-parity with the reference forms over the worst rim region.
 
 `--check` confirms it: windfoil (validated against Skia — `docs/ALGORITHM.md §5`) and this Slug agree to mean
-**|Δrgb| ≈ 0.0014** on text and **≈ 0.0006** on the tiger — two different exact-ish AA models nearly coinciding.
+**|Δrgb| ≈ 0.0014** on text and **≈ 0.0016** on the tiger — two different exact-ish AA models nearly coinciding.
 
 **Where the two models genuinely disagree — sub-pixel strokes.** The tiger's whiskers at a 512px drawing
 height are ~0.2–0.5px wide. Against a 8×8-supersampled ground truth of that region, windfoil's exact area

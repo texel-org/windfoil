@@ -30,6 +30,13 @@ Restore: thread `want_grad` through `integrate_piece/band/face` (return `grad` b
 
 ## Band Moments
 
+> **Status:** built and measured — see [`../bench/ACCEL-NOTES.md`](../bench/ACCEL-NOTES.md). As an *exact*
+> in-shader fast path this loses (two independent designs were net-negative: register bloat + branch
+> divergence, §3–§5 there). But the per-band `S` data itself **shipped** as the minification guard's banded
+> ink profile (`src/bands.js` computes it, `MINIFICATION_GUARD` in `src/windfoil.wgsl` consumes it): used as
+> an *approximation* for whole instances below ~3.7 device px rather than an exact path inside the gather —
+> ~30× at a 2px em, bit-identical at legible sizes. The sketch below is kept for the underlying math.
+
 Minified, a footprint spans whole bands → `integrate_face` runs every curve per pixel (worst case). But a band
 fully covered in y (glyph inside the box in x) contributes a constant + a term linear in `rc.x`, precomputable.
 Per band, `xref` = bbox `loX`:
@@ -57,6 +64,11 @@ Cost: one `bandData: array<vec2>` (binding 4), 2 floats/band. Magnified path unt
 a 1px box).
 
 ## Backdrop
+
+> **Status:** untried at scene level. A per-glyph cell variant was part of the rejected 2D-cell fusion
+> ([`../bench/ACCEL-NOTES.md`](../bench/ACCEL-NOTES.md) §3); the idea below — scene-level cells folding deep
+> painter's-order stacks into one integer — targets a different bottleneck (overdraw across shapes, not
+> curves within one) and remains open.
 
 A pixel buried in a complex scene shouldn't scan curves it can't see. §2's `clamp` already sends every edge
 **fully right of the box** to `sx·Δy`; over edges that also span the box in y this sums to `sx·sy·(integer

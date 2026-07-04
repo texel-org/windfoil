@@ -1,4 +1,4 @@
-// tiger.js — the third scene: an actual SVG drawing (the Ghostscript tiger), 304 overlapping shapes / ~14k
+// tiger.js — the third scene: an actual SVG drawing (the Ghostscript tiger), 304 overlapping shapes / ~22k
 // quadratics from bench/fixtures/tiger-quadratics.json. Unlike the glyph grid (non-overlapping) and the single
 // complex shape, this has real painter's-order OVERDRAW — many shapes stack over the same pixels, so a pixel
 // runs one fragment per covering shape, each gathering that shape's own bands. It's the scene windfoil's
