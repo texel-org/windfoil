@@ -34,7 +34,7 @@ ladders run from a few px up to 8192px = ~512×), `--target-ms` (batch sizing), 
 `--shape-fill nonzero|evenodd`, `--check` (+ `--check-px N` to render/diff at a specific size), `--images`
 (dump a PNG per level — both algorithms — to `output/bench/levels/<scene>_<px>px_{windfoil,slug}.png`, zero-padded
 so they sort by zoom; skips timing). At deep magnification the glyph scene centers on a real stem near the origin
-(so you "just see the stem"); the shape and tiger center on a unit, so all three zoom into ink not whitespace.
+(so you "just see the stem"); the other scenes center on a unit (the hairlines scene on its crossing), so every scene zooms into ink not whitespace.
 
 > The bundled tiger is a **simplified** version, so its absolute atlas sizes / timings won't match a
 > production tiger — it's here to show relative behavior across views.
@@ -206,7 +206,7 @@ range (banded-ink guard, ~5× faster), and **magnification** on all three scenes
 
 Core-algorithm changes tuned with this harness (all coverage-preserving where exactness matters —
 `deno task validate` is bit-identical throughout; long-form engineering log in
-[`ACCEL-NOTES.md`](ACCEL-NOTES.md) §9–§12):
+[`ACCEL-NOTES.md`](ACCEL-NOTES.md)):
 
 - **`TARGET_PER_BAND` 6 → 10** (`src/bands.js`). Coarser bands cost windfoil almost nothing per extra piece
   (early-break + clamp/subtract far curves, no solve) while a footprint spans fewer of them — ~8–19% faster at
@@ -224,7 +224,7 @@ Core-algorithm changes tuned with this harness (all coverage-preserving where ex
 - **`mono_root` branch pick via sign(a1)** instead of evaluating the derivative at the root (they're
   algebraically equal picks): shape mid-zooms −2–4%.
 
-Also measured and rejected (see ACCEL-NOTES §11): band-level x-hull skips in the exact gather and
+Also measured and rejected (see ACCEL-NOTES): band-level x-hull skips in the exact gather and
 flat-interpolated instance data — both slowed the hot path more than they saved. Earlier rejects (straight-piece
 fast path, the two moment/backdrop accelerations below) still stand.
 

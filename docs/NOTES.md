@@ -32,7 +32,7 @@ Restore: thread `want_grad` through `integrate_piece/band/face` (return `grad` b
 
 > **Status:** built and measured — see [`../bench/ACCEL-NOTES.md`](../bench/ACCEL-NOTES.md). As an _exact_
 > in-shader fast path this loses (two independent designs were net-negative: register bloat + branch
-> divergence, §3–§5 there). But the per-band `S` data itself **shipped** as the minification guard's banded
+> divergence — see the "rejected: exact in-shader moments" notes there). But the per-band `S` data itself **shipped** as the minification guard's banded
 > ink profile (`src/bands.js` computes it, `MINIFICATION_GUARD` in `src/windfoil.wgsl` consumes it): used as
 > an _approximation_ for whole instances below ~3.7 device px rather than an exact path inside the gather —
 > ~30× performance improvement at a 2px em, bit-identical at legible sizes. The sketch below is kept for the underlying math.
@@ -66,7 +66,7 @@ a 1px box).
 ## Backdrop
 
 > **Status:** untried at scene level. A per-glyph cell variant was part of the rejected 2D-cell fusion
-> ([`../bench/ACCEL-NOTES.md`](../bench/ACCEL-NOTES.md) §3); the idea below — scene-level cells folding deep
+> ([`../bench/ACCEL-NOTES.md`](../bench/ACCEL-NOTES.md), 2D-cell fusion); the idea below — scene-level cells folding deep
 > painter's-order stacks into one integer — targets a different bottleneck (overdraw across shapes, not
 > curves within one) and remains open.
 
