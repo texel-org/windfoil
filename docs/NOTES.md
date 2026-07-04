@@ -102,6 +102,14 @@ a uniform so fill stays `sEff == s`.
 
 ## Filter Kernels
 
+> **Status:** built — see [`KERNELS.md`](KERNELS.md). The sketch below became `src/windfoil-ext.wgsl` +
+> `src/kernels.js`: tent (exact), truncated Gaussian, the Mitchell–Netravali family, exact analytic motion
+> blur, and a non-separable bokeh disc, each a spliced shader specialization so the box default keeps loading
+> the untouched `windfoil.wgsl`. Two things the sketch under-called: the y-side knots must split *pieces*, not
+> integration windows (window splits re-scan far curves and cost 54× at small text), and "closed-form per
+> piece" is best realized as knot-split Gauss–Legendre (exact for polynomial kernels, and composite slicing
+> rescues the smooth ones from steep-piece under-resolution).
+
 Nothing in §2 assumes the footprint weight is uniform — it filters the winding number by any kernel `k(x,y)`.
 With the horizontal cumulative `Φ(x,y) = ∫_{−∞}^{x} k(u,y) du`:
 

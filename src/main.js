@@ -8,12 +8,16 @@ import { loadFont } from "./font.js";
 import { buildGlyphAtlas } from "./bands.js";
 import { layoutStack } from "./layout.js";
 import { renderToRGBA } from "./gpu.js";
+import { loadKernelShaderCode } from "./kernels.js";
 import { encodePNG } from "./png.js";
 
 // --gamma / --sharp: an opt-in perceptual coverage curve applied on top of the exact coverage (gamma = stem
 // weight, <1 bolder / >1 thinner; sharp = edge contrast about 0.5, >1 crisper / <1 softer). Both default to
 // 1.0 — the identity — so the plain render is the bit-for-bit exact box filter.
 //   e.g. `deno task render --gamma 0.72 --sharp 1.1`
+// --kernel: the filter kernel (box | tent | gaussian | mitchell | bspline | catmullrom | mblur=L | disc=R —
+// see src/kernels.js / docs/KERNELS.md). Default box = the untouched reference shader.
+//   e.g. `deno task render --kernel gaussian`
 function argValue(name) {
   const i = Deno.args.indexOf(`--${name}`);
   if (i >= 0 && i + 1 < Deno.args.length) return Deno.args[i + 1];
@@ -33,6 +37,7 @@ function argNumber(name, fallback) {
 const gamma = argNumber("gamma", 1.0);
 const sharp = argNumber("sharp", 1.0);
 const style = [gamma, sharp];
+const kernel = argValue("kernel") ?? "box";
 
 const TEXT = "The five boxing wizards jump quickly";
 const INK = [12, 15, 28, 0xff].map((x) => x / 0xff); // near-black ink
@@ -72,7 +77,7 @@ const instanceData = new Float32Array(instances);
 const instanceCount = instanceData.length / 16;
 
 console.log(
-  `Rendering "${TEXT}" [gamma ${gamma}, sharp ${sharp}] at ${sizes.length} sizes (${sizes[0]}–${MAX_SIZE}px) → ${width}×${height}`,
+  `Rendering "${TEXT}" [gamma ${gamma}, sharp ${sharp}, kernel ${kernel}] at ${sizes.length} sizes (${sizes[0]}–${MAX_SIZE}px) → ${width}×${height}`,
 );
 const t0 = performance.now();
 const rgba = await renderToRGBA({
@@ -84,6 +89,7 @@ const rgba = await renderToRGBA({
   instances: instanceData,
   instanceCount,
   style,
+  code: await loadKernelShaderCode(kernel),
 });
 const t1 = performance.now();
 

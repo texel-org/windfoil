@@ -257,3 +257,7 @@ the path is exact:
   its root branch by the sign of `a1` instead of evaluating the derivative.
 - **Measured and rejected** — exact in-shader band moments (two designs), band-level hull skips in the gather,
   and flat-interpolated instance data: all net-negative from register pressure / divergence; kept out.
+- **Pluggable filter kernels** — the gather generalized past the box filter (tent, truncated Gaussian, the
+  Mitchell–Netravali family, exact analytic motion blur, a bokeh disc) in a PARALLEL shader
+  (`src/windfoil-ext.wgsl`, specialized per kernel by `src/kernels.js`); this file's shader stays the untouched
+  box reference and the default path still loads it byte-for-byte. See [`KERNELS.md`](KERNELS.md).
