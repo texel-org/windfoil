@@ -85,12 +85,35 @@ starburst cusps). Porting the real combine + `CalcRootCode` fixed it — that wa
 limitation of Slug.
 
 One adaptation over the reference: roots use the numerically stable `q = b.y + sign(b.y)·d` form (roots
-`{q/a.y, c.y/q}`), not `(b.y ∓ d)/a.y`. Our curves are in **font units** (coords in the hundreds/thousands),
-where the naïve form loses all f32 precision on flat curves; the reference is fine because it works in normalized
-em space. Same trick windfoil's `mono_root` uses.
+`{q/a.y, c.y/q}`), not `(b.y ∓ d)/a.y` — our curves are in **font units**, and the naïve form's `b − d`
+cancellation hurts on flat curves (`a → 0`). Same trick windfoil's `mono_root` uses. **But the q-form needs a
+grazing-curve guard the naïve form gets for free**: when a curve grazes the ray, the true discriminant is ≤ 0
+and `d` clamps to zero — the reference's `(b ∓ d)/a` then collapses BOTH roots to the same point, so their
+coverage ramps cancel exactly, while `{q/a, c/q}` coincide only for an *exact* discriminant and otherwise
+land on two different points whose ramps don't cancel. Early versions of this port were missing that guard,
+and every near-tangent curve sprayed up to ±1 coverage — a fringe of needles around the self-crossing
+shape's rim at 256–512px and thin phantom lines on the tiger at 8192px. A CPU replica of the shader pinned it:
+not a precision issue (f64 reproduced the fringe), not inherent to Slug (the reference root forms render it
+clean) — purely this port's adaptation. `slug.wgsl` now folds to the shared extremum root `b/a` when
+`d == 0`, and the replica confirms bit-parity with the reference forms over the worst rim region.
 
 `--check` confirms it: windfoil (validated against Skia — `docs/ALGORITHM.md §5`) and this Slug agree to mean
 **|Δrgb| ≈ 0.0014** on text and **≈ 0.0006** on the tiger — two different exact-ish AA models nearly coinciding.
+
+**Where the two models genuinely disagree — sub-pixel strokes.** The tiger's whiskers at a 512px drawing
+height are ~0.2–0.5px wide. Against a 8×8-supersampled ground truth of that region, windfoil's exact area
+integral sits ~2.4× closer (mean |Δrgb| 0.7 vs 1.8 per 255); Slug renders the whiskers slightly darker and
+beaded, because a point-sampled ray either slices a near-parallel thin stroke for a long run (coverage → 1,
+weight sometimes high) or misses it, and the reliability weighting can't always rescue the combine. That is
+the algorithm's documented thin-feature behavior, not a port bug — with the port now verified line-by-line
+(root-code table, dual-ray rotation equivalence, weighted combine) and bit-matched to the reference forms,
+the darkness difference is Slug shown at its best.
+
+**Content hygiene note:** two of the tiger fixture's shapes (152, 160) end a subpath away from its start.
+An open contour has no well-defined winding number, and the two algorithms disagree *differently* about it —
+windfoil's exact integral showed a phantom hairline swept by the missing edge (the old
+`tiger_01024px_windfoil` artifact); Slug a phantom speck. SVG fill semantics implicitly close every subpath,
+so `tiger.js` now appends the closing edge on load, feeding both algorithms identical closed outlines.
 
 ## Findings (Apple GPU, Deno 2.x — your numbers will differ)
 
@@ -98,62 +121,84 @@ em space. Same trick windfoil's `mono_root` uses.
 
 | regime | glyph px | result |
 | --- | --- | --- |
-| sub-pixel | ≤ ~1.4px | **windfoil ~8× faster** — its `MINIFICATION_GUARD` fires (pixel bigger than the glyph → cheap coverage-from-area) |
-| minification | ~1.5–2px | **slug up to ~7× faster** — windfoil's worst case: the footprint spans many row bands, integrating many curves per pixel |
-| small text | 3–16px | slug ~2.5–6× faster |
-| reading / display | 24–128px | slug ~1.05–2× faster |
-| magnified | ≥ ~192px | windfoil edges ahead (~1 curve/pixel, no dual-ray tax); both fill-rate bound |
+| illegible | ≤ ~4px | **windfoil ~5–6× faster** — the `MINIFICATION_GUARD` renders whole tiny glyphs from their precomputed banded ink profile (a few table taps, no curve reads) |
+| small text | 8–16px | slug ~2.2–3.4× faster — windfoil's remaining worst case: exactness is required, and its per-crossing ALU (multiple monotone solves + a polynomial) outweighs Slug's one solve + ramp |
+| reading / display | 32–64px | slug ~1.2–1.6× faster |
+| magnified | ≥ ~128px | windfoil ahead (up to ~1.5× at 8192px) — ~1 curve/pixel, no dual-ray tax |
 
-windfoil trades per-pixel cost for exactness and degrades at minification (many bands per footprint), where
-Slug's one-band-per-ray cost stays flat — until windfoil's sub-pixel guard undercuts it again below a pixel.
-(The sweep bottoms out near ~1px: filling a viewport with sub-pixel units needs an impractical instance count —
-a property of instanced rendering, not the algorithms.)
+windfoil trades per-pixel cost for exactness and used to degrade without bound at minification (many bands
+per footprint); the banded-ink guard now caps that entire regime at the point where text stops being legible
+(a whole glyph ≤ ~3.7 device px on both axes), where the profile is visually equivalent and ~30× faster than
+integrating. From 8px up the render is bit-identical to the exact integral — the guard cannot fire there by
+construction (an 8px em's lowercase is ~4.3px tall).
 
 **Complex shape (240 self-crossing quads):**
 
-- **Quality** — with the faithful Slug both renders are clean; windfoil's exact area integral still edges it at
-  the ultra-sharp ellipse **cusps** (Slug leaves a thin needle where two edges converge to a near-point), but the
-  gross "spiky" artifacts were a bug in the earlier naïve combine, now fixed. Mean |Δrgb| ≈ 0.012, concentrated
-  at the cusps.
-- **Speed** — Slug is faster through the practical range; windfoil overtakes at high magnification (from
-  ~256–512px on the tiled shape, up to ~1.7× at 4096px), where its footprint collapses to a single band and its
-  compare-don't-solve far-curve handling + single band axis win. A dense shape makes many bands, so windfoil's
-  footprint spans several of them until magnified — its structural advantage is latent across normal zoom.
+- **Quality** — with the faithful Slug (including the grazing-root fix above) both renders are clean;
+  windfoil's exact area integral still edges it at the ultra-sharp ellipse **cusps** (Slug leaves a thin
+  needle where two edges converge to a near-point). Mean |Δrgb| ≈ 0.0003 at the 256px check, concentrated at
+  the cusps.
+- **Speed** — Slug is faster through the practical range (up to ~6× at 12px); windfoil overtakes from ~512px
+  (to ~2.6× at 8192px), where its footprint collapses to a single band and its compare-don't-solve far-curve
+  handling + single band axis win. This mid-zoom gap is structural: nearly every curve of the dense shape
+  spans a minified pixel's slab, so the exact integral is O(all curves) per pixel while Slug point-samples two
+  scanlines — and the shape stays clearly visible at these sizes, so the guard rightly won't approximate it.
 
 **Tiger (real SVG, 304 overlapping shapes):**
 
-- **Quality** — near-identical to windfoil (mean |Δrgb| ≈ 0.0006 even at 512× zoom). The whisker-tip / fur
-  spikes visible in an earlier version were the naïve-combine bug, not Slug.
-- **Speed** — Slug leads at thumbnail/normal views (64px ~3.4×, 512px ~1.1×), but windfoil pulls ahead zoomed in
-  (**~1024px up, to ~1.2–1.4×** at 4096px) — earlier than the single blob, because the tiger's many smaller shapes
-  each reach a single-band footprint sooner, and the layered overdraw (a pixel runs one fragment per covering
-  shape) rewards windfoil's cheaper per-shape gather + single band axis.
-- **Memory** — the clearest win: windfoil's atlas is ~half of Slug's (**~490 KB vs ~950 KB** for this simplified
+- **Quality** — near-identical to windfoil (mean |Δrgb| ≈ 0.0016 at the 512px check, dominated by the
+  sub-pixel whiskers — where windfoil is the one that matches a supersampled ground truth; see the
+  implementation notes).
+- **Speed** — Slug leads at thumbnail/normal views (64px ~4.6×, 512px ~1.2×), windfoil from 1024px up
+  (~1.2–1.4×). The layered overdraw (a pixel runs one fragment per covering shape) rewards windfoil's cheaper
+  per-shape gather + single band axis once shapes reach a single-band footprint. Raising the guard dial
+  (`GUARD_PX` 3.7 → 8) buys another **1.9×** at 64px (23.4 ms) for approximated sub-8px features, with mean
+  error below the two algorithms' own AA-model difference — a knob for thumbnail-heavy workloads, off by
+  default.
+- **Memory** — the clearest win: windfoil's atlas is ~half of Slug's (**786 KB vs 1.6 MB** for this simplified
   tiger; the repo README cites ~0.84 vs 1.54 MB for the full one). Same ~2× ratio.
 
 **Deep magnification (zoomed into a stem / a piece of the tiger — up to ~512×):** windfoil **wins on all three
-scenes** here (glyphs ~1.2–1.25×, tiger ~1.16–1.23×, shape up to ~1.44×), and holds exact AA with no precision
+scenes** (glyphs ~1.2–1.5×, tiger ~1.2–1.4×, shape up to ~2.6×), and holds exact AA with no precision
 wobble — the footprint is a single band of ~1 curve, so its cheap far-curve handling + single band axis beat
 Slug's dual-ray, dual-solve. This is the regime for graphics work zoomed all the way in.
 
 **Memory / bandwidth** — orthogonal to per-frame time, windfoil's single band axis stores about **half** of
-Slug's dual bands (glyph atlas 59 KB vs 124 KB; shape 67 KB vs 90 KB; tiger ~½), matching the repo README's
+Slug's dual bands (glyph atlas 53 KB vs 131 KB; shape 44 KB vs 91 KB; tiger ~½), matching the repo README's
 tiger-SVG figures. This is the "half the reads" advantage; on these GPUs the coverage math is ALU-bound, so it
 doesn't show up in frame time at normal zoom, but it does in footprint and would in a bandwidth-bound scene.
 
 The honest summary: on this hardware Slug's lighter per-crossing coverage (one root solve + a ramp) beats
-windfoil's exact area integral (several solves + a polynomial) across most zoom levels; windfoil's wins are
-**exactness/quality** (self-intersections, overlap, the exact box filter) and **memory**, plus raw speed at the
-sub-pixel guard and (increasingly, on the shape and tiger) magnification.
+windfoil's exact area integral (several solves + a polynomial) through the legible small-to-reading text range
+(8–64px) and the dense shape's mid zooms; windfoil wins **exactness/quality** (self-intersections, overlap,
+sub-pixel strokes, the exact box filter), **memory** (~½ the atlas), the entire **illegible-minification**
+range (banded-ink guard, ~5× faster), and **magnification** on all three scenes.
 
-## Applied optimization
+## Applied optimizations
 
-This harness was used to tune one core-algorithm change: **`TARGET_PER_BAND` 6 → 10** in `src/bands.js`.
-Coarser bands cost windfoil almost nothing per extra piece (early-break + clamp/subtract far curves, no solve)
-while a footprint spans fewer of them — measured **~8–19% faster at small/medium sizes** with no large-size
-regression and a ~15% smaller atlas, coverage bit-identical (`deno task validate` unchanged). It's
-windfoil-specific, so the benchmark pins Slug's own bands at 6 (via `bandPieces`'s new optional argument) to keep
-the comparison fair. Also rejected: a straight-piece fast path (`mono_root` already skips the `sqrt` for lines).
+Core-algorithm changes tuned with this harness (all coverage-preserving where exactness matters —
+`deno task validate` is bit-identical throughout; long-form engineering log in
+[`ACCEL-NOTES.md`](ACCEL-NOTES.md) §9–§12):
+
+- **`TARGET_PER_BAND` 6 → 10** (`src/bands.js`). Coarser bands cost windfoil almost nothing per extra piece
+  (early-break + clamp/subtract far curves, no solve) while a footprint spans fewer of them — ~8–19% faster at
+  small/medium sizes, ~15% smaller atlas. Windfoil-specific, so the benchmark pins Slug's own bands at 6 (via
+  `bandPieces`'s optional argument) to keep the comparison fair.
+- **Banded-ink minification guard** (`MINIFICATION_GUARD` / `GUARD_PX`, `src/windfoil.wgsl`): each band's
+  exact winding integral + x-hull ride in the row table ([start, count, area, xMin, xMax] per band); an
+  instance spanning ≤ 3.7 device px renders from that profile with no curve reads. Glyphs @2px **45 → 1.7 ms**,
+  @4px **11.8 → 0.44 ms** (windfoil flips from ~5× slower than Slug to ~5× faster); ≥ 8px bit-identical.
+- **AA pad 2px → 1px** (both vertex shaders — coverage only reaches half a pixel past the ink). The pad ring
+  dominates small instances' fragment count: ~20–35% faster below 16px for *both* algorithms, no visual change.
+- **Footprint via `fwidth`** instead of per-axis `length()`: −2 sqrt per fragment, bit-identical under the
+  axis-aligned camera, and the same measure the reference Slug uses.
+- **`BAND_SORT_MIN` 8 → 4**: the sorted early-break pays for itself on nearly any band (tiger −4–5%).
+- **`mono_root` branch pick via sign(a1)** instead of evaluating the derivative at the root (they're
+  algebraically equal picks): shape mid-zooms −2–4%.
+
+Also measured and rejected (see ACCEL-NOTES §11): band-level x-hull skips in the exact gather and
+flat-interpolated instance data — both slowed the hot path more than they saved. Earlier rejects (straight-piece
+fast path, the two moment/backdrop accelerations below) still stand.
 
 ## Rejected: band-moments acceleration (two attempts, both net-negative)
 
@@ -179,8 +224,9 @@ The root cause is the GPU execution model, not the math:
   moment targets — which is why the y-prefix gets *worse* toward 2px.
 
 Conclusion: an exact per-fragment moment cannot beat windfoil's plain gather inside one shader — the bloat +
-divergence swamp the O(1) win. The only acceleration that would sidestep both is a **separate, cheaper shader**
-selected per instance/zoom — i.e. a prefiltered coverage **mip** sampled below a crossover size (O(1), no
-divergence, box-filtered = windfoil's own target). That trades away windfoil's atlas-free identity, so it's a
-product decision, not a free win. Absent that, **minification is windfoil's inherent weak flank** (it wins
-magnification, memory, and exact quality); the `TARGET_PER_BAND` tune above is the analytic ceiling that helped.
+divergence swamp the O(1) win. What DOES work is giving up exactness precisely where it buys nothing: the
+banded-ink guard above owns the illegible end (whole instance ≤ a few px) at instance granularity, coherent
+and nearly data-free. For the **legible** 8–64px text range exactness is mandatory, so the per-crossing ALU
+gap there is structural; the only thing that would close it is a prefiltered coverage **mip** sampled below a
+crossover size (O(1), no divergence, box-filtered = windfoil's own target). That trades away windfoil's
+atlas-free identity, so it's a product decision, not a free win — documented for users who need it, not built.

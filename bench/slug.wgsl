@@ -30,14 +30,15 @@ struct Instance {
 // Bands with count > SORT_MIN are x-sorted on the CPU (by hull max along the ray axis, descending), so once a
 // curve is fully behind the ray's near clamp edge every remaining one is too and we can break. MUST equal
 // BAND_SORT_MIN in ../src/bands.js — the Slug atlas is filed with the same bandPieces().
-const SORT_MIN : u32 = 8u;
+const SORT_MIN : u32 = 4u;
 
 @group(0) @binding(0) var<uniform> U : Uniforms;
 @group(0) @binding(1) var<storage, read> instances : array<Instance>;
 // The curve atlas: three consecutive vec2 per whole quadratic (endpoints + control). Horizontal-band curves
 // are stored plain (x, y); vertical-band curves are stored rotated 90° as (y, −x) so one gather serves both.
 @group(0) @binding(2) var<storage, read> curves : array<vec2<f32>>;
-// Row-band table: a flat [start, count] pair per band, indexing into `curves` (piece units).
+// Row-band table: a flat [start, count, area, xMin, xMax] quintuple per band, indexing into `curves`
+// (piece units). The three bit-punned f32s are windfoil-guard data this shader skips over.
 @group(0) @binding(3) var<storage, read> rows : array<u32>;
 
 struct VsOut {
@@ -46,7 +47,7 @@ struct VsOut {
   @location(1) @interpolate(flat) inst : u32,
 };
 
-// Vertex stage — byte-for-byte identical to windfoil.wgsl (same instanced unit quad, same 2px pad, same
+// Vertex stage — byte-for-byte identical to windfoil.wgsl (same instanced unit quad, same 1px pad, same
 // camera), so the two shaders differ only in the fragment coverage computation.
 @vertex
 fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VsOut {

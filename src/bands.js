@@ -24,10 +24,10 @@ const MAX_BANDS = 64;
 // first piece fully left of the pixel; shorter bands stay in curve order and take the plain linear scan.
 // MUST equal SORT_MIN in windfoil.wgsl — the shader only breaks early on bands it assumes are sorted, so a mismatch
 // is either a correctness bug (breaks an unsorted band) or lost perf (never breaks a sorted one).
-// Tuning: measured over the Lato glyph set (a–z + ",."), post-duplication band occupancy is min 2 / median 8 /
-// avg 8.3 / max 21, clustered at 6–9. 8 sits at the median — small common bands stay on the cheap scan, and
-// only the heavier tail (~40% of bands, where the linear scan wastes the most) pays for the sort + early break.
-export const BAND_SORT_MIN = 8;
+// Tuning: was 8 (the median Lato band occupancy) on the theory that small bands don't repay a sort; re-measured
+// on the zoom-ladder bench after the 1px pad + minification guard, 4 is mildly better (tiger −4–5%, glyphs
+// neutral) — the early break pays for itself on nearly any band, and the sort itself is build-time-only.
+export const BAND_SORT_MIN = 4;
 
 function chooseBands(pieceCount, targetPerBand) {
   if (pieceCount <= targetPerBand) return 1;
@@ -56,10 +56,11 @@ function monoRootT(a, b, e0, e1, v, rising) {
   return Math.min(Math.max(t, 0), 1);
 }
 
-// Exact winding integral ∫∫_strip w dA of one band's pieces over its y-strip [b0, b1], with x measured from
-// the shape's left edge x0 (so the shader can spread it back over the bbox width). Each piece contributes
+// Exact winding integral ∫∫_strip w dA of one band's pieces over its y-strip [b0, b1]. Each piece contributes
 // ∫ (x(t) − x0)·y′(t) dt over the t-range where y(t) ∈ [b0, b1] — a quartic antiderivative, exact in f64.
-// Windows tile across bands, so duplicated pieces never double-count (same argument as the shader gather).
+// (The x reference x0 is immaterial for a closed contour — its net flux through the strip is zero — it only
+// keeps magnitudes small.) Windows tile across bands, so duplicated pieces never double-count (same argument
+// as the shader gather).
 function bandWindingArea(pieces, bucket, x0, b0, b1) {
   let area = 0;
   for (const k of bucket) {
@@ -95,9 +96,8 @@ function f32bits(v) {
  * `rowOut`. Beyond start/count, each band carries three f32s (bit-punned into the integer table):
  *   • area — the band strip's EXACT winding integral ∫∫_strip w dA, for the shader's minification guard
  *     (tiny glyphs render from this banded ink profile instead of gathering curves).
- *   • xMin/xMax — the hull of the band's pieces in x, for band-level skips: a pixel fully right of a band's
- *     ink adds nothing; one fully left of it adds nothing either when its slab covers the whole strip (a
- *     closed contour's net flux through a full strip is zero). One compare instead of a piece scan.
+ *   • xMin/xMax — the hull of the band's pieces in x; the guard spreads each band's area over this hull, so
+ *     approximated glyphs keep per-band letterform hints instead of smearing across the whole ink box.
  * Returns the band header { rowBase, bandCount, y0, invH } the shader reads (rowBase in row-quintuple units).
  */
 export function bandPieces(pieces, y0, y1, curveOut, rowOut, targetPerBand = TARGET_PER_BAND) {

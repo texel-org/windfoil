@@ -20,27 +20,34 @@ struct Instance {
 
 // Bands with count > SORT_MIN are x-sorted on the CPU (by hull x-max, descending), so once we reach a piece
 // fully left of the box every remaining piece is too and we can break. MUST equal BAND_SORT_MIN in bands.js —
-// see the tuning note there (8 = the median band occupancy for the Lato glyph set).
-const SORT_MIN : u32 = 8u;
+// see the tuning note there.
+const SORT_MIN : u32 = 4u;
 
 // When a glyph shrinks to a few pixels, every pixel's footprint spans most of its bands, so the gather
 // integrates nearly all of its curves at every pixel and per-pixel cost peaks — while the text is far too
 // small to read, so exactness buys nothing. Below GUARD_PX device pixels (whole glyph, both axes) the guard
 // swaps the gather for a banded ink profile: each band's EXACT winding integral ∫∫_strip w dA is precomputed
 // at atlas build (one f32 riding in the row table) and the pixel takes its y-overlap share of each band,
-// spread uniformly across the ink box in x. Sub-pixel glyphs resolve to their true average coverage; at 2–4
-// px the vertical ink distribution (stems, bowls, baselines) survives and only the x-profile flattens. The
-// branch is per-instance-per-zoom (warp-coherent), and the path is a few band taps — no curve reads at all.
+// spread uniformly across that band's ink hull in x. Sub-pixel glyphs resolve to their true average
+// coverage; at 2–4px the vertical ink distribution (stems, bowls, baselines) survives and only the per-band
+// x-profile flattens. The branch is per-instance-per-zoom (warp-coherent), and the path is a few band taps —
+// no curve reads at all.
+//
+// 3.7 covers every Lato glyph at a 4px em (tallest ≈ 0.9em ≈ 3.6px) while leaving an 8px em untouched
+// (lowercase x-height ≈ 0.54em ≈ 4.3px) — it fires only where text is illegible anyway. Dense vector art
+// with lots of sub-8px features (drawing thumbnails) can raise it: on the bench's tiger at a 64px drawing
+// height, 8.0 renders 1.9× faster with a mean error smaller than the windfoil-vs-Slug AA-model difference —
+// but that trades exactness of small-but-visible features, so it is not the default.
 const MINIFICATION_GUARD = true;
-const GUARD_PX = 3.0;
+const GUARD_PX = 3.7;
 
 @group(0) @binding(0) var<uniform> U : Uniforms;
 @group(0) @binding(1) var<storage, read> instances : array<Instance>;
 // The deduped, band-duplicated curve atlas: three consecutive vec2 per xy-monotone piece (endpoints + control).
 @group(0) @binding(2) var<storage, read> curves : array<vec2<f32>>;
 // Row-band table: a flat [start, count, areaBits, xMinBits, xMaxBits] quintuple per band — start/count
-// index into `curves`; the bit-punned f32s are the band's precomputed winding integral (the minification
-// guard's ink profile) and its piece hull in x (band-level skip tests). See bands.js.
+// index into `curves`; the bit-punned f32s are the band's precomputed winding integral and its piece hull
+// in x, both consumed only by the minification guard's banded ink profile. See bands.js.
 @group(0) @binding(3) var<storage, read> rows : array<u32>;
 
 struct VsOut {
@@ -124,9 +131,10 @@ fn mono_root(a2 : f32, a1 : f32, a0 : f32, e1 : f32, v : f32, rising : bool) -> 
   let qq = -0.5 * (a1 + select(-sq, sq, a1 >= 0.0));   // numerically stable quadratic
   let r1 = qq / a2;
   let r2 = select(0.0, c / qq, qq != 0.0);
-  let d1 = qd(a2, a1, r1);
-  let want = select(-1.0, 1.0, rising);
-  let t = select(r2, r1, d1 * want >= 0.0);
+  // The derivative at r1 is 2·a2·r1 + a1 = 2·qq + a1 = −sign(a1)·sq, so "derivative sign matches `rising`"
+  // reduces to a sign test on a1 — no derivative evaluation, and the pick no longer waits on the division.
+  // (When sq = 0 the roots coincide, so either pick is the same value.)
+  let t = select(r2, r1, (a1 < 0.0) == rising);
   return clamp(t, 0.0, 1.0);
 }
 

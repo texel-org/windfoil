@@ -1,9 +1,10 @@
 # windfoil acceleration — engineering notes
 
 Working notes from exploring ways to speed up windfoil where it loses badly to Slug. Two moment-based
-accelerations were built, measured, and reverted; this records *why*, so we don't repeat them, and points at the
-one path that could actually work. Condensed version lives in `README.md` → "Rejected: band-moments
-acceleration"; this is the long form.
+accelerations were built, measured, and reverted; this records *why*, so we don't repeat them. A second
+round (§9–§12) found the accelerations that DO work — a banded-ink minification guard, a tighter AA pad,
+and small footprint/sort tunes — plus two more reverted attempts that confirm the §5 bloat rule. Condensed
+version lives in `README.md`; this is the long form.
 
 Machine: Apple GPU via Deno 2.x WebGPU (Metal). Numbers are relative and machine-specific.
 
@@ -109,8 +110,81 @@ magnification, memory, and exact quality).
 - **Straight-piece fast path** — rejected: `mono_root` already skips the `sqrt` for lines, so the ceiling is
   tiny and would add divergence.
 
-## 8. Recommendation
+## 8. Recommendation (superseded in part by §9–§12)
 
 Don't attempt further in-shader moment/backdrop variants — the bloat+divergence ceiling is now well established.
 If minification performance becomes a product priority, build the coverage-mip hybrid (separate shader, O(1)).
 Otherwise treat minification as windfoil's known trade-off and lean on its wins elsewhere.
+
+*(Second-round addendum: the mip is NOT the only viable minification accel after all — §9's banded-ink guard
+closes the sub-legible end analytically, with no baked textures. The mip remains the only option for the
+legible 8–64px text range, where exactness is required and the per-crossing ALU gap is structural.)*
+
+## 9. What worked — banded-ink minification guard (kept)
+
+The moment attempts failed because they tried to stay *exact* inside the hot shader. Dropping the exactness
+requirement exactly where it buys nothing — glyphs so small they're illegible — changes the game. The row
+table now carries, per band, the strip's **exact winding integral** ∫∫ w dA (computed analytically on the CPU
+at atlas build, f64, one f32 per band) plus the band's x-hull. When a whole instance spans ≤ `GUARD_PX`
+(3.7) device pixels on both axes, the fragment shader renders it from this **banded ink profile** — the
+pixel's y-overlap share of each band's area, spread across the band's x-hull — a handful of band taps, zero
+curve reads.
+
+Why this survives the §5 rules where the moments died:
+
+- **No divergence at the sizes it fires**: the condition is per-instance-per-zoom. At a 2–4px em, *every*
+  glyph takes the guard, so warps are coherent (the earlier per-fragment x-containment conditions diverged
+  *more* as glyphs shrank).
+- **No meaningful register/bloat tax**: the path is a short loop of table reads sharing the slab math with
+  the exact gather. Measured at magnified sizes the plain path is unchanged (within noise), unlike the
+  moment shaders' ~15–20% penalty.
+- **The data is free**: +12 bytes per band in the row table (~2–4% of an atlas).
+
+Measured (720², median ms/frame): glyphs @2px **45 → 1.6** (windfoil goes from ~5× slower than Slug to ~5×
+faster), @4px **11.8 → 0.44** (from ~4× slower to ~5.8× faster); ≥8px bit-identical because the guard cannot
+fire (an 8px em's lowercase is ~4.3px tall > 3.7). Visually, sub-pixel glyphs get their true per-glyph
+average coverage (replacing the old flat `INK_AVERAGE = 0.42` guess); 2–4px text keeps its vertical ink
+distribution and per-band x-hull hints.
+
+The same dial extends to dense art: at `GUARD_PX = 8` the tiger @64px drawing height runs **1.9× faster**
+(44.6 → 23.4 ms) with mean |Δrgb| ≈ 4/255 — *smaller than the windfoil-vs-Slug AA-model difference there*
+(≈ 10.6/255) — but it approximates features up to 8px on screen, so it's an opt-in knob, not the default.
+
+## 10. What worked — smaller things (kept)
+
+- **AA pad 2px → 1px** (both vertex shaders): box-filter coverage reaches only half a pixel past the ink, so
+  1px pad still has 2× margin. The pad ring dominates fragment count for small instances: both algorithms
+  gained ~20–35% below 16px, with no visual change (it's pure fragment-count reduction).
+- **Footprint via `fwidth`** instead of two `length()` calls: −2 sqrt per fragment, bit-identical under
+  axis-aligned cameras, and it *matches the reference Slug's own footprint measure*.
+- **`BAND_SORT_MIN` 8 → 4**: sorting more bands lets the early break fire on nearly all of them; tiger −4–5%,
+  glyphs neutral. (Sort cost is build-time only.)
+
+## 11. Reverted again — two more confirmations of the §5 rule
+
+- **Band-level x-hull skips in the exact gather** (compare the pixel box against the band's stored hull and
+  `continue` before scanning pieces; the "fully-left over a full strip" case is exactly zero for closed
+  contours): −8…−14% on glyphs at *every* zoom, tiger mixed. The two extra row loads + live values slow the
+  hot loop more than the skipped scans save — the fully-left case was already one compare via the sorted
+  early break, and the full-strip case almost never fires outside the regime the guard already owns.
+- **Flat-interpolated instance data** (hoist the 4 instance vec4s from a per-fragment storage fetch into
+  `@interpolate(flat)` varyings): −6…−9% across the board on Apple TBDR — interpolator/register cost beats
+  the (well-cached, uniform-per-instance) storage read.
+
+Pattern intact: *anything* added to the per-piece/per-band hot path costs everywhere; wins must either
+remove work uniformly (pad, fwidth) or move whole instances onto a separate cheap path at coherent
+granularity (the guard).
+
+## 12. A correction to §the-earlier-notes' numerics claim
+
+Earlier notes claimed the reference Slug's naïve root form `(b ∓ d)/a` is fine "because it works in
+normalized em space". That was wrong — floating point is scale-invariant, so em-normalization changes
+nothing. The stable q-form (`q = b + sign(b)·d`, roots `{q/a, c/q}`) genuinely helps *flat* curves
+(`a → 0`), **but** it silently broke the reference's grazing-curve behavior: when the discriminant clamps to
+zero, `(b ∓ d)/a` collapses both roots to the *same* point (their coverage ramps cancel exactly), while
+`{q/a, c/q}` are equal only for an exact discriminant — with it clamped they are two *different* points and
+every near-tangent curve sprayed ±1 coverage. That was the entire "Slug fringe" on the self-crossing shape
+(and the fine lines on the tiger at 8192px) — our port bug, not Slug's flaw, fixed by collapsing to the
+shared extremum root `b/a` when `d == 0`. A CPU replica of the shader (f32 and f64) confirmed: the fringe
+was not a precision issue (f64 reproduced it) and not inherent (the reference forms render it clean), and
+after the fix our port matches the reference forms bit-for-bit on the worst rim region.
