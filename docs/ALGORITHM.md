@@ -233,3 +233,27 @@ existing work and may well overlap ideas we haven't traced. A rough, non-exhaust
 - **Per-cell / random-access schemes** — [Random-Access Vector Graphics](https://hhoppe.com/proj/ravg/) (Nehab & Hoppe), Ganacim et al.: per-cell curve lookup, related to the banding (§6).
 - **Classic area sampling** — Catmull (1978), Duff: coverage by integrating over the shape.
 - **Atlas / distance-field text** — [Valve SDF](https://steamcdn-a.akamaihd.net/apps/valve/2007/SIGGRAPH2007_AlphaTestedMagnification.pdf) (Chris Green), [msdfgen](https://github.com/Chlumsky/msdfgen) (Viktor Chlumský): baked-resolution alternatives.
+
+---
+
+## Changelog
+
+How the algorithm has evolved since the first draft — each change benchmarked in [`../bench/`](../bench/README.md)
+(long-form notes in [`ACCEL-NOTES.md`](../bench/ACCEL-NOTES.md)), with `deno task validate` bit-identical wherever
+the path is exact:
+
+- **Initial algorithm** — the closed-form winding integral (§2–§4) gathered through row bands (§6), plus a crude
+  sub-pixel guard (a hardcoded average ink fraction for glyphs smaller than a pixel).
+- **Band tuning** — `TARGET_PER_BAND` 6 → 10: coarser bands are nearly free per extra piece (early break, cheap
+  far-curve path), and a footprint spans fewer of them (~8–19% at small/medium sizes, ~15% smaller atlas). Later,
+  `BAND_SORT_MIN` 8 → 4 (the sorted early break pays on nearly any band).
+- **Banded-ink minification guard** — the row table grew from `[start, count]` pairs to
+  `[start, count, area, xMin, xMax]`: each band's exact winding integral (computed analytically at atlas build)
+  and its x-hull. An instance spanning ≤ `GUARD_PX` (≈3.7) device pixels renders from this profile — its true
+  per-band ink, no curve reads — replacing the hardcoded average and capping the minification worst case (~30×
+  at a 2px em) while legible sizes stay exact, bit-for-bit (§8).
+- **Fragment-cost trims** — the AA skirt pad tightened 2px → 1px (coverage reaches only half a pixel past the
+  ink; the pad ring dominates small instances), the footprint moved to `fwidth` (no sqrt), and `mono_root` picks
+  its root branch by the sign of `a1` instead of evaluating the derivative.
+- **Measured and rejected** — exact in-shader band moments (two designs), band-level hull skips in the gather,
+  and flat-interpolated instance data: all net-negative from register pressure / divergence; kept out.
