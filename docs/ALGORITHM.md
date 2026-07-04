@@ -255,3 +255,6 @@ the path is exact:
 - **Fragment-cost trims** — the AA skirt pad tightened 2px → 1px (coverage reaches only half a pixel past the
   ink; the pad ring dominates small instances), the footprint moved to `fwidth` (no sqrt), and `mono_root` picks
   its root branch by the sign of `a1` instead of evaluating the derivative.
+- **Simplification pass** — the shader deduplicated into named helpers (`fold_shade`, `profile_face`, the band
+  mapping/overlap helpers, `ROW_*` layout constants) and dead guards removed — verified byte-identical renders
+  and baseline-identical timings.
