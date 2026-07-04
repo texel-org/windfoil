@@ -30,12 +30,12 @@ Restore: thread `want_grad` through `integrate_piece/band/face` (return `grad` b
 
 ## Band Moments
 
-> **Status:** built and measured — see [`../bench/ACCEL-NOTES.md`](../bench/ACCEL-NOTES.md). As an *exact*
+> **Status:** built and measured — see [`../bench/ACCEL-NOTES.md`](../bench/ACCEL-NOTES.md). As an _exact_
 > in-shader fast path this loses (two independent designs were net-negative: register bloat + branch
 > divergence, §3–§5 there). But the per-band `S` data itself **shipped** as the minification guard's banded
 > ink profile (`src/bands.js` computes it, `MINIFICATION_GUARD` in `src/windfoil.wgsl` consumes it): used as
-> an *approximation* for whole instances below ~3.7 device px rather than an exact path inside the gather —
-> ~30× at a 2px em, bit-identical at legible sizes. The sketch below is kept for the underlying math.
+> an _approximation_ for whole instances below ~3.7 device px rather than an exact path inside the gather —
+> ~30× performance improvement at a 2px em, bit-identical at legible sizes. The sketch below is kept for the underlying math.
 
 Minified, a footprint spans whole bands → `integrate_face` runs every curve per pixel (worst case). But a band
 fully covered in y (glyph inside the box in x) contributes a constant + a term linear in `rc.x`, precomputable.

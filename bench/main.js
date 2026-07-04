@@ -13,6 +13,8 @@
 //              (it compares — doesn't solve — far curves, and reads one band axis vs Slug's two).
 //   • tiger  — a real SVG drawing (the Ghostscript tiger): 304 overlapping shapes with painter's-order
 //              overdraw, each shape one instance with its own bands.
+//   • hairlines — the AA-quality pattern (sub-pixel stroke fan + needle spikes + zone plate): geometry
+//              where Slug's point-sampled coverage visibly deviates from windfoil's area integral.
 //
 // A "zoom level" is the on-screen size in device px (pixels-per-em): the camera scales the fixed world scene so
 // a unit is `emPx` tall. Each scene's grid is sized to fill the viewport at its smallest level; larger levels
@@ -31,6 +33,7 @@ import { buildSlugAtlas, loadSlugShaderCode } from './slug.js';
 import { buildScene, SCENE_TEXT, INK } from './scene.js';
 import { buildShapeScene } from './shape.js';
 import { buildTigerScene } from './tiger.js';
+import { buildHairlineScene } from './hairlines.js';
 
 // ── args ──────────────────────────────────────────────────────────────────────────────────────────────
 function argValue(name) {
@@ -51,13 +54,13 @@ const CHECK = Deno.args.includes('--check');
 const CHECK_PX = argNumber('check-px', 0); // override the --check render size (0 = each scene's default)
 const IMAGES = Deno.args.includes('--images'); // dump a PNG per level (windfoil + slug), skip timing
 const REF_PX = 16; // "1× zoom" reference: a 16px em is normal reading size
-// --scene: any of glyphs,shape,tiger (comma list), or `all` / `both` (=glyphs,shape). Default all three.
+// --scene: any of glyphs,shape,tiger,hairlines (comma list), or `all` / `both` (=glyphs,shape). Default all.
 const sceneArg = (argValue('scene') || 'all').toLowerCase();
 const SCENES = sceneArg === 'all'
-  ? ['glyphs', 'shape', 'tiger']
+  ? ['glyphs', 'shape', 'tiger', 'hairlines']
   : sceneArg === 'both'
   ? ['glyphs', 'shape']
-  : sceneArg.split(',').map((x) => x.trim()).filter((x) => ['glyphs', 'shape', 'tiger'].includes(x));
+  : sceneArg.split(',').map((x) => x.trim()).filter((x) => ['glyphs', 'shape', 'tiger', 'hairlines'].includes(x));
 const SHAPE_FILL = argValue('shape-fill') === 'evenodd' ? 1 : 0;
 
 const levelsArg = argValue('levels');
@@ -69,7 +72,10 @@ const parseLevels = (def) =>
 const GLYPH_LEVELS = parseLevels([2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]);
 const SHAPE_LEVELS = parseLevels([12, 16, 24, 32, 48, 64, 128, 256, 512, 1024, 2048, 4096, 8192]);
 const TIGER_LEVELS = parseLevels([64, 128, 256, 512, 1024, 2048, 4096, 8192]); // px = whole-drawing height on screen
-const levelsFor = (which) => (which === 'glyphs' ? GLYPH_LEVELS : which === 'shape' ? SHAPE_LEVELS : TIGER_LEVELS);
+// hairlines: the fan strokes are 2.5/1960 of the pattern → sub-pixel until ~2048px, the regime the scene tests
+const HAIR_LEVELS = parseLevels([64, 128, 256, 512, 1024, 2048, 4096]);
+const levelsFor = (which) =>
+  which === 'glyphs' ? GLYPH_LEVELS : which === 'shape' ? SHAPE_LEVELS : which === 'tiger' ? TIGER_LEVELS : HAIR_LEVELS;
 
 const W = TARGET, H = TARGET;
 const BG = [233, 227, 213, 0xff].map((x) => x / 0xff); // warm off-white
@@ -122,7 +128,8 @@ const median = (a) => (a.length ? [...a].sort((x, y) => x - y)[a.length >> 1] : 
 const atlasKB = (curves, rows) => `${((curves.byteLength + rows.byteLength) / 1024).toFixed(0)}KB`;
 
 // Short scene tag for output filenames, derived from the ladder title.
-const sceneTag = (title) => (title.startsWith('complex') ? 'shape' : title.startsWith('tiger') ? 'tiger' : 'glyphs');
+const sceneTag = (title) =>
+  title.startsWith('complex') ? 'shape' : title.startsWith('tiger') ? 'tiger' : title.startsWith('hairline') ? 'hairlines' : 'glyphs';
 
 // One measurement: warm up, size the batch so it runs ~TARGET_MS, then median per-frame over a few batches.
 async function measure(renderer, cam) {
@@ -321,6 +328,13 @@ for (const which of SCENES) {
       ...sh, checkEmPx: 256,
       statsLine: `${sh.stats.quads} quads · windfoil ${sh.stats.wBanded} banded / ${sh.stats.wBands} bands / ${atlasKB(sh.wCurves, sh.wRows)} · ` +
         `slug ${sh.stats.sBanded} banded / ${sh.stats.sBands} bands (dual) / ${atlasKB(sh.sCurves, sh.sRows)}`,
+    }, levels);
+  } else if (which === 'hairlines') {
+    const hl = buildHairlineScene({ emWorld: EM_WORLD, extent });
+    await runLadder(`hairlines · sub-pixel fan + needle spikes + zone plate · ${hl.stats.quads} quads · nonzero`, {
+      ...hl, checkEmPx: 512,
+      statsLine: `${hl.stats.quads} quads · windfoil ${hl.stats.wBanded} banded / ${hl.stats.wBands} bands / ${atlasKB(hl.wCurves, hl.wRows)} · ` +
+        `slug ${hl.stats.sBanded} banded / ${hl.stats.sBands} bands (dual) / ${atlasKB(hl.sCurves, hl.sRows)}`,
     }, levels);
   } else {
     const tg = await buildTigerScene({ emWorld: EM_WORLD, extent });
