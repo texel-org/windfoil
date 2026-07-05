@@ -43,13 +43,14 @@ function storage(device, floats) {
  * @param {GPUTextureFormat} o.format the render target's format ('rgba8unorm' offscreen; the canvas preferred format live)
  * @param {Float32Array} o.curves    the deduped, band-duplicated curve atlas (3 vec2 per monotone piece)
  * @param {Uint32Array} o.rows       the row-band table ([start, count, area, xMin, xMax] per band; see bands.js)
- * @param {Float32Array} o.instances packed instance data (16 floats each)
+ * @param {Float32Array} o.instances packed instance data (FLOATS_PER_INSTANCE floats each; see layout.js)
  * @param {number} o.instanceCount
  */
 export function createGlyphRenderer(device, { code, format, curves, rows, instances, instanceCount }) {
   const module = device.createShaderModule({ code });
 
   // Uniforms: res (vec2) + style (gamma, sharp) + camera (scaleX, scaleY, transX, transY) = 8 floats.
+  // (The Instance stride is defined by the WGSL struct — see FLOATS_PER_INSTANCE in layout.js; callers pack it.)
   const uniform = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const curveBuf = storage(device, curves);
   const rowBuf = storage(device, rows);
@@ -95,6 +96,11 @@ export function createGlyphRenderer(device, { code, format, curves, rows, instan
         // res, style, cam
         new Float32Array([width, height, style[0], style[1], cam[0], cam[1], cam[2], cam[3]]),
       );
+    },
+    // Replace the instance data in place (same length). The soft-shadow demo uses this to rescale each
+    // frame's penumbra with the zoom (the blur diameter is screen-space); static scenes never call it.
+    updateInstances(data) {
+      device.queue.writeBuffer(instBuf, 0, data);
     },
     // Record the one instanced draw for every glyph into an open render pass.
     draw(pass) {

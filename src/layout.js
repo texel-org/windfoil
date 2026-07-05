@@ -4,7 +4,7 @@
 
 import { advanceOf, kerningOf } from './font.js';
 
-export const FLOATS_PER_INSTANCE = 16;
+export const FLOATS_PER_INSTANCE = 20;
 
 /** Width of a laid-out string in device pixels at the given size (used to size the canvas). */
 export function measureText(text, font, fontSizePx) {
@@ -39,6 +39,7 @@ export function layoutLine(out, text, table, font, { x, baselineY, fontSizePx, c
         gl.bbox[0], gl.bbox[1], gl.bbox[2], gl.bbox[3], // ink box (font units)
         r, g, b, a, // color
         gl.rowBase, gl.bandCount, gl.y0, gl.invH, // row-band table + y-origin / bands-per-unit
+        0, 0, 0, 0, // blur: text is never blurred (sEff == s → exact box filter, bit-for-bit)
       );
     }
     pen += advanceOf(font, ch) * scale; // advance for glyphs and spaces alike

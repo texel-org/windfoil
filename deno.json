@@ -1,7 +1,9 @@
 {
   "tasks": {
     "render": "deno run --unstable-webgpu -A src/main.js",
+    "shadows": "deno run -A tools/shadow-preview.js",
     "validate": "deno run --unstable-webgpu -A tools/validate.js",
+    "validate:blur": "deno run -A tools/validate-blur.js",
     "serve": "deno run -A jsr:@std/http@^1/file-server --port 8080 .",
     "cert": "deno run -A tools/gen-cert.js",
     "serve:https": "deno run -A tools/gen-cert.js && deno run -A jsr:@std/http@^1/file-server --port 8080 --cert cert.pem --key key.pem ."

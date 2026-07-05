@@ -29,12 +29,25 @@ deno task serve
 
 Note: this repo refers to "Skia" but is actually using [`@napi-rs/canvas`](https://www.npmjs.com/package/@napi-rs/canvas) as a reference, which uses Skia under the hood.
 
+## Soft shadows
+
+<img src="./assets/shadow-canopy.png" width="100%" alt="a canopy of vector leaves casting analytic soft shadows with variable penumbra" />
+
+The same per-pixel box filter that anti-aliases a glyph will, evaluated over a **wider** box, render a soft
+shadow — and because the box width is just a parameter of the integral, it can vary per pixel. So the penumbra
+sharpens at contact and softens with the occluder→receiver gap (contact hardening), analytically, with no blur
+pass, shadow map, or SDF. [`docs/SHADOWS.md`](docs/SHADOWS.md) explains the derivation; the interactive canopy is
+in [`demo/shadows/`](demo/shadows/) (`deno task serve`, then open `demo/shadows/`), and the image above is
+rendered offscreen on the CPU by [`tools/shadow-preview.js`](tools/shadow-preview.js).
+
 ## What's here
 
 This README was written by me, but most of the code and other documentation in the repo was produced by agents at my direction.
 
 - [`docs/ALGORITHM.md`](docs/ALGORITHM.md) — the algorithm
 - [`docs/NOTES.md`](docs/NOTES.md) — some additional properties of the algorithm I've found interesting for my own uses
+- [`docs/SHADOWS.md`](docs/SHADOWS.md) — analytic soft shadows / variable penumbra by widening the filter box
+- [`demo/shadows/`](demo/shadows/) — the interactive soft-shadow canopy (WebGPU)
 - [`src/windfoil.wgsl`](src/windfoil.wgsl) — the shader: the winding-integral box filter + the row-band gather
 - [`src/bands.js`](src/bands.js) — the row-band acceleration structure
 - [`src/font.js`](src/font.js) — glyph outlines + metrics from the bundled font (using opentype.js)
