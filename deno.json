@@ -1,7 +1,9 @@
 {
   "tasks": {
     "render": "deno run --unstable-webgpu -A src/main.js",
+    "render:variable": "deno run --unstable-webgpu -A src/variable-main.js",
     "validate": "deno run --unstable-webgpu -A tools/validate.js",
+    "validate:variable": "deno run --unstable-webgpu -A tools/variable-validate.js",
     "serve": "deno run -A jsr:@std/http@^1/file-server --port 8080 .",
     "cert": "deno run -A tools/gen-cert.js",
     "serve:https": "deno run -A tools/gen-cert.js && deno run -A jsr:@std/http@^1/file-server --port 8080 --cert cert.pem --key key.pem ."
@@ -9,7 +11,8 @@
   "imports": {
     "png-tools": "npm:png-tools@^1.0.4",
     "opentype.js": "npm:opentype.js@1.3.5",
-    "@napi-rs/canvas": "npm:@napi-rs/canvas@^0.1.100"
+    "@napi-rs/canvas": "npm:@napi-rs/canvas@^0.1.100",
+    "@texel/color": "npm:@texel/color@^1.1.11"
   },
   "fmt": {
     "lineWidth": 110,
