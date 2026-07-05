@@ -20,6 +20,9 @@ Requires [Deno](https://deno.com/) 2.x on a machine with a WebGPU-capable GPU.
 # renders a PNG in output/
 deno task render
 
+# per-anchor color + blur variant (docs/VARIABLE.md)
+deno task render:variable
+
 # compare against point-sampled box filter and Skia
 deno task validate
 
@@ -35,6 +38,7 @@ This README was written by me, but most of the code and other documentation in t
 
 - [`docs/ALGORITHM.md`](docs/ALGORITHM.md) — the algorithm
 - [`docs/NOTES.md`](docs/NOTES.md) — some additional properties of the algorithm I've found interesting for my own uses
+- [`docs/VARIABLE.md`](docs/VARIABLE.md) — a variant with per-anchor OKLab color + blur fields ([`src/windfoil-variable.wgsl`](src/windfoil-variable.wgsl))
 - [`src/windfoil.wgsl`](src/windfoil.wgsl) — the shader: the winding-integral box filter + the row-band gather
 - [`src/bands.js`](src/bands.js) — the row-band acceleration structure
 - [`src/font.js`](src/font.js) — glyph outlines + metrics from the bundled font (using opentype.js)
