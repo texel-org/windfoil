@@ -13,6 +13,11 @@ struct Instance {
   bbox  : vec4<f32>, // ink box loX, loY, hiX, hiY (glyph units, Y-down)
   color : vec4<f32>, // straight-alpha RGBA
   band  : vec4<f32>, // rowBase, bandCount, y0, invH
+  // Soft-shadow / box-blur widening (docs/SHADOWS.md). All zero ⇒ the exact 1px box filter, bit-for-bit.
+  //   x = base penumbra diameter in DEVICE px at the ink's min corner (bbox.xy)
+  //   yz = its gradient in device px per glyph-unit — a depth tilt: the penumbra widens across the shape
+  //   w = max penumbra diameter (the clamp ceiling; also sizes the vertex skirt so no penumbra is clipped)
+  blur  : vec4<f32>,
 };
 
 // Bands with count > SORT_MIN are x-sorted on the CPU so the gather can break at the first piece fully left
@@ -49,10 +54,14 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VsO
   let I = instances[ii];
   let unitsToPx = I.place.z;
   let camScale = U.cam.xy;
-  // 1 device px pad so the AA skirt is never clipped (coverage reaches at most half a pixel past the ink).
-  let pad = 1.0 / (unitsToPx * max(camScale.x, 1e-6));
-  let lo = I.bbox.xy - vec2<f32>(pad);
-  let hi = I.bbox.zw + vec2<f32>(pad);
+  // Skirt so neither the AA edge nor the penumbra is clipped: a box-blurred edge reaches half its diameter
+  // past the ink, so a 1px filter needs ~0.5px and a maxBlur penumbra needs maxBlur/2 more. Keep the
+  // historical conservative 1px base (so blur == 0 is byte-identical to the pre-blur skirt).
+  let padPx = 1.0 + 0.5 * I.blur.w;
+  let padX = padPx / (unitsToPx * max(camScale.x, 1e-6));
+  let padY = padPx / (unitsToPx * max(camScale.y, 1e-6));
+  let lo = I.bbox.xy - vec2<f32>(padX, padY);
+  let hi = I.bbox.zw + vec2<f32>(padX, padY);
   // Unit-quad corners for a triangle-strip; vi ∈ {0..3}.
   let uv = vec2<f32>(f32(vi & 1u), f32(vi >> 1u));
   let em = mix(lo, hi, uv);
@@ -291,8 +300,16 @@ fn fs(in : VsOut) -> @location(0) vec4<f32> {
   // units_per_pixel from the screen-space gradients — the device pixel's preimage under scale/translation.
   let s = max(fwidth(rc), vec2<f32>(1e-9));
 
-  if (MINIFICATION_GUARD && all(s * GUARD_PX >= I.bbox.zw - I.bbox.xy)) {
+  // Widen the filter box to box-blur the winding number (docs/SHADOWS.md). The blur *diameter* in device px
+  // is evaluated per pixel — a base plus a depth tilt — so one instance's penumbra can sharpen at contact and
+  // soften with the gap, all from the same closed-form integral. blur == 0 leaves sEff == s (exact fill).
+  let maxBlur = I.blur.w;
+  let blurPx = clamp(I.blur.x + dot(I.blur.yz, rc - I.bbox.xy), 0.0, maxBlur);
+  let sEff = s * (1.0 + blurPx);
+
+  // Minification guard is the exact-fill fast path only; a blurred instance always takes the real integral.
+  if (MINIFICATION_GUARD && maxBlur == 0.0 && all(s * GUARD_PX >= I.bbox.zw - I.bbox.xy)) {
     return fold_shade(profile_face(I.band, I.bbox, rc, s) / (s.x * s.y), I.place.w, I.color);
   }
-  return fold_shade(integrate_face(I.band, rc, s) / (s.x * s.y), I.place.w, I.color);
+  return fold_shade(integrate_face(I.band, rc, sEff) / (sEff.x * sEff.y), I.place.w, I.color);
 }

@@ -92,6 +92,10 @@ Wire-up: coarse cell grid with per-cell `[curveStart, count]` + $W$, read in `in
 
 ## Box Blur
 
+> **Status:** shipped, as the mechanism behind analytic soft shadows — see [`SHADOWS.md`](./SHADOWS.md) and the
+> [`demo/shadows/`](../demo/shadows/) canopy. The `blur` field on `Instance` carries a per-pixel-variable box
+> diameter (`sEff = s·(1 + blurPx)`), gated so `blur == 0` stays the exact 1px filter, bit-for-bit.
+
 A box filter over a **wider** box is a box blur, and the gather already computes an exact box filter over the
 footprint `s`. So scale `s` up before the gather: `k` device px → a `k`px blur, no second sample or SDF, same
 path. Edges ramp over `k`px, sub-`k` stems dim to the ink average, consistent width at any zoom.

@@ -29,12 +29,28 @@ deno task serve
 
 Note: this repo refers to "Skia" but is actually using [`@napi-rs/canvas`](https://www.npmjs.com/package/@napi-rs/canvas) as a reference, which uses Skia under the hood.
 
+## Soft shadows
+
+<img src="./assets/shadow-canopy.png" width="100%" alt="dappled tree-canopy shadow on the ground, penumbra sharp at the bottom and soft toward the top" />
+
+The same per-pixel filter that anti-aliases a glyph will, evaluated over a **wider** footprint, render a soft
+shadow — and because the footprint is just a parameter of the integral, both its **width and its kernel** can
+vary per pixel. Swap the box for the **sun's disc** and vary its radius with the occluder→receiver gap and you
+get an ideal penumbra: a smooth S-curve edge, sharp at contact and soft up high (contact hardening), with round
+sun-dapples where the canopy's gaps are smaller than the penumbra. No blur pass, shadow map, or SDF. The image
+above is a dappled tree-canopy shadow — one union-of-leaves silhouette convolved with a variable-radius disc —
+rendered on the CPU by the analytic boundary integral ([`tools/tree-shadow.js`](tools/tree-shadow.js),
+`deno task tree-shadow`). [`docs/SHADOWS.md`](docs/SHADOWS.md) has the derivation; the live variable-footprint
+mechanism is in [`demo/shadows/`](demo/shadows/) (`deno task serve`, then open `demo/shadows/`).
+
 ## What's here
 
 This README was written by me, but most of the code and other documentation in the repo was produced by agents at my direction.
 
 - [`docs/ALGORITHM.md`](docs/ALGORITHM.md) — the algorithm
 - [`docs/NOTES.md`](docs/NOTES.md) — some additional properties of the algorithm I've found interesting for my own uses
+- [`docs/SHADOWS.md`](docs/SHADOWS.md) — analytic soft shadows / variable penumbra by widening the filter box
+- [`demo/shadows/`](demo/shadows/) — the interactive soft-shadow canopy (WebGPU)
 - [`src/windfoil.wgsl`](src/windfoil.wgsl) — the shader: the winding-integral box filter + the row-band gather
 - [`src/bands.js`](src/bands.js) — the row-band acceleration structure
 - [`src/font.js`](src/font.js) — glyph outlines + metrics from the bundled font (using opentype.js)

@@ -13,7 +13,7 @@
 
 import { parseFont } from "../src/font.js";
 import { buildGlyphAtlas } from "../src/bands.js";
-import { layoutStack } from "../src/layout.js";
+import { layoutStack, FLOATS_PER_INSTANCE } from "../src/layout.js";
 import {
   loadShaderCode,
   requestDevice,
@@ -298,7 +298,7 @@ async function main() {
   contentBounds = bounds;
 
   const instanceData = new Float32Array(instances);
-  const instanceCount = instanceData.length / 16;
+  const instanceCount = instanceData.length / FLOATS_PER_INSTANCE;
 
   // WebGPU device + canvas swapchain, configured for the preferred format.
   const device = await requestDevice();

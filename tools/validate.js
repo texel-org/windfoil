@@ -84,7 +84,8 @@ function buildScene(quads, evenodd, scale) {
   const curveOut = [], rowOut = [];
   const { rowBase, bandCount, y0: by0, invH } = bandPieces(pieces, y0, y1, curveOut, rowOut);
   const rule = evenodd ? 1 : 0;
-  const instances = new Float32Array([0, 0, scale, rule, x0, y0, x1, y1, 1, 1, 1, 1, rowBase, bandCount, by0, invH]);
+  // 20 floats/instance: place, bbox, color, band, blur — blur all-zero keeps this the exact box filter.
+  const instances = new Float32Array([0, 0, scale, rule, x0, y0, x1, y1, 1, 1, 1, 1, rowBase, bandCount, by0, invH, 0, 0, 0, 0]);
   return { curves: new Float32Array(curveOut), rows: new Uint32Array(rowOut), instances };
 }
 

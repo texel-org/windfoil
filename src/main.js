@@ -6,7 +6,7 @@
 
 import { loadFont } from "./font.js";
 import { buildGlyphAtlas } from "./bands.js";
-import { layoutStack } from "./layout.js";
+import { layoutStack, FLOATS_PER_INSTANCE } from "./layout.js";
 import { renderToRGBA } from "./gpu.js";
 import { encodePNG } from "./png.js";
 
@@ -69,7 +69,7 @@ const width = Math.ceil(bounds.maxX + MARGIN); // content box + the right/bottom
 const height = Math.ceil(bounds.maxY + MARGIN);
 
 const instanceData = new Float32Array(instances);
-const instanceCount = instanceData.length / 16;
+const instanceCount = instanceData.length / FLOATS_PER_INSTANCE;
 
 console.log(
   `Rendering "${TEXT}" [gamma ${gamma}, sharp ${sharp}] at ${sizes.length} sizes (${sizes[0]}–${MAX_SIZE}px) → ${width}×${height}`,
