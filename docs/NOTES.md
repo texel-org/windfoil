@@ -81,7 +81,7 @@ Tile the scene; file only hull-intersecting curves into each cell, precompute $W
 fully right of + y-spanning it:
 
 $$
-F = W + \frac{\texttt{integrate\_cell}(\text{local curves})}{s_x s_y}
+F = W + \frac{\text{integrate\_cell}(\text{local curves})}{s_x s_y}
 $$
 
 Exact (integer $W$), so coverage is bit-for-bit — the win is that far geometry costs zero fragment work (a pixel
@@ -111,7 +111,7 @@ $$
 F = \sum_e \int \Phi(x_e(t), y_e(t)) \cdot y_e'(t)\, dt
 $$
 
-Box is the degree-0 case ($\Phi = \operatorname{clamp}(x, x_{lo}, x_{hi}) - x_{lo}$, the ramp §2 integrates). A separable $k = k_x k_y$ just
+Box is the degree-0 case ($\Phi = \text{clamp}(x, x_{lo}, x_{hi}) - x_{lo}$, the ramp §2 integrates). A separable $k = k_x k_y$ just
 raises $\Phi$'s degree, still closed-form per piece:
 
 - **Tent / bilinear** — $\Phi$ quadratic; +1 x-zone at the center knot, 2px support.
@@ -120,4 +120,4 @@ raises $\Phi$'s degree, still closed-form per piece:
 
 So the box is the reference, not a ceiling — the kernel is a rendering choice (tent softer, MN crisper), the
 principled version of the `style` curve. Cost: wider support → more bands + later break, each knot → an x-zone.
-$\Phi \cdot y'$ generalizes `integrate_piece`; the box is its $\Phi = \operatorname{clamp} - x_{lo}$ case.
+$\Phi \cdot y'$ generalizes `integrate_piece`; the box is its $\Phi = \text{clamp} - x_{lo}$ case.

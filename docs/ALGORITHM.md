@@ -42,14 +42,14 @@ the curves $e$:
 
 $$
 \iint_B w\, dA = \sum_e A_e, \qquad
-A_e = \int_{\,y_e(t) \in [y_{lo}, y_{hi}]} \big( \operatorname{clamp}(x_e(t), x_{lo}, x_{hi}) - x_{lo} \big)\, y_e'(t)\, dt
+A_e = \int_{\,y_e(t) \in [y_{lo}, y_{hi}]} \big( \text{clamp}(x_e(t), x_{lo}, x_{hi}) - x_{lo} \big)\, y_e'(t)\, dt
 $$
 
 At height $y$ the curve sits at $x_e$, so the horizontal extent it covers inside the box is
-$\operatorname{clamp}(x_e, x_{lo}, x_{hi}) - x_{lo}$; the $y_e'\, dt$ factor sweeps that extent up the curve with the correct sign. The
+$\text{clamp}(x_e, x_{lo}, x_{hi}) - x_{lo}$; the $y_e'\, dt$ factor sweeps that extent up the curve with the correct sign. The
 single clamp collapses the cases:
 
-| curve position relative to box | $\operatorname{clamp}(x_e, x_{lo}, x_{hi}) - x_{lo}$ | contribution                           |
+| curve position relative to box | $\text{clamp}(x_e, x_{lo}, x_{hi}) - x_{lo}$ | contribution                           |
 | ------------------------------ | ---------------------------- | -------------------------------------- |
 | fully **left** ($x_e \leq x_{lo}$)   | $0$                          | nothing                                |
 | fully **right** ($x_e \geq x_{hi}$)  | $x_{hi} - x_{lo} = s_x$             | full box width $\times \Delta y$ — interior winding |
@@ -108,7 +108,7 @@ extent tests.
 Normalize $F = \left( \sum_e A_e \right) / (s_x s_y)$, the pixel-averaged winding number, and fold to coverage by fill rule:
 
 - **nonzero:** $\text{coverage} = \min(|F|, 1)$
-- **even-odd:** $\text{coverage} = \operatorname{tri}(F)$, the period-2 triangle wave.
+- **even-odd:** $\text{coverage} = \text{tri}(F)$, the period-2 triangle wave.
 
 For a pixel spanning two adjacent winding levels (ordinary edge pixels) this is the exact box-filtered
 coverage. For a pixel with opposite-sign winding cancellation or three or more winding levels at once, the fold
