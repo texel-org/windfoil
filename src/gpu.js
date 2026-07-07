@@ -49,8 +49,9 @@ function storage(device, floats) {
 export function createGlyphRenderer(device, { code, format, curves, rows, instances, instanceCount }) {
   const module = device.createShaderModule({ code });
 
-  // Uniforms: res (vec2) + style (gamma, sharp) + camera (scaleX, scaleY, transX, transY) = 8 floats.
-  const uniform = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  // Uniforms: res (vec2) + style (gamma, sharp) + camera (scaleX, scaleY, transX, transY) + flags (vec4;
+  // .x = exact-supersample mode) = 12 floats / 48 bytes. Slug's shader reads only the first 32 bytes.
+  const uniform = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const curveBuf = storage(device, curves);
   const rowBuf = storage(device, rows);
   const instBuf = storage(device, instances);
@@ -87,13 +88,14 @@ export function createGlyphRenderer(device, { code, format, curves, rows, instan
 
   return {
     // Update the per-frame uniforms. `cam` is [scaleX, scaleY, transX, transY] (identity by default, so the
-    // offscreen path passes only width/height/style).
-    setUniforms({ width, height, style = [1, 1], cam = [1, 1, 0, 0] }) {
+    // offscreen path passes only width/height/style). `exact` opts into the shader's per-pixel supersampled
+    // fill (offline/static only — much slower); it defaults off so the fast path is unchanged.
+    setUniforms({ width, height, style = [1, 1], cam = [1, 1, 0, 0], exact = false }) {
       device.queue.writeBuffer(
         uniform,
         0,
-        // res, style, cam
-        new Float32Array([width, height, style[0], style[1], cam[0], cam[1], cam[2], cam[3]]),
+        // res, style, cam, flags (flags.x = exact)
+        new Float32Array([width, height, style[0], style[1], cam[0], cam[1], cam[2], cam[3], exact ? 1 : 0, 0, 0, 0]),
       );
     },
     // Record the one instanced draw for every glyph into an open render pass.
@@ -116,9 +118,13 @@ export function createGlyphRenderer(device, { code, format, curves, rows, instan
  * @param {Float32Array} o.curves    @param {Uint32Array} o.rows    @param {Float32Array} o.instances
  * @param {number} o.instanceCount
  * @param {[number, number]} [o.style] coverage-style (gamma, sharp); [1, 1] = exact (identity)
+ * @param {boolean} [o.exact] opt into the shader's per-pixel supersampled fill (offline/static; slow but correct
+ *                            on the winding-fold's failure cases — see docs/ALGORITHM.md §4)
  * @returns {Promise<Uint8Array>} width*height*4 RGBA8, straight alpha
  */
-export async function renderToRGBA({ width, height, background, curves, rows, instances, instanceCount, style = [1, 1] }) {
+export async function renderToRGBA(
+  { width, height, background, curves, rows, instances, instanceCount, style = [1, 1], exact = false },
+) {
   const device = await requestDevice();
   const format = 'rgba8unorm';
   const code = await loadShaderCode();
@@ -130,7 +136,7 @@ export async function renderToRGBA({ width, height, background, curves, rows, in
   });
 
   const renderer = createGlyphRenderer(device, { code, format, curves, rows, instances, instanceCount });
-  renderer.setUniforms({ width, height, style }); // identity camera → device px === layout px
+  renderer.setUniforms({ width, height, style, exact }); // identity camera → device px === layout px
 
   const [br, bg, bb, ba = 1] = background;
   const encoder = device.createCommandEncoder();

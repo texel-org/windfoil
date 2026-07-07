@@ -119,6 +119,12 @@ Vello), which clamp the same averaged winding; a full coverage rasterizer like S
 exactly and only deviates alongside us at sharp self-intersection slivers (§8). So the integral is exact for the
 averaged winding number; the fold is exact only under the usual local-winding assumptions.
 
+For offline/static renders where per-pixel cost is not a concern, an opt-in **exact mode** (`{exact: true}` →
+`U.flags.x` in the shader) skips the fold entirely: it samples the true fill rule on an `EXACT_GRID`×`EXACT_GRID`
+grid inside the pixel footprint — reusing the same banded curve gather — and averages, so it is correct on every
+case above (converging to the box filter as the grid grows). It is a uniform branch, so the interactive fast path
+is unchanged when it is off; the trade is `EXACT_GRID²` winding evaluations per pixel.
+
 ---
 
 ## 5. Numerical validation

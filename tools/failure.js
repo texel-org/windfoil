@@ -29,6 +29,7 @@ import { createCanvas } from '@napi-rs/canvas';
 
 const S = 128; // cell size in px (whole-shape render)
 const F = 24; // point-sample grid per pixel for the box-filter ground truth
+const EXACT_GRID_NOTE = "the shader's 8×8 sub-sample quantisation, → 0 as EXACT_GRID rises"; // see windfoil.wgsl
 
 // ── geometry helpers (flat quads [x0,y0,cx,cy,x1,y1,...], a line = a midpoint quad; same convention as validate) ─
 function line(x0, y0, x1, y1) {
@@ -79,7 +80,7 @@ function buildScene(quads, evenodd) {
   ]);
   return { curves: new Float32Array(curveOut), rows: new Uint32Array(rowOut), instances };
 }
-async function ourCoverage(quads, evenodd = false, size = S) {
+async function ourCoverage(quads, evenodd = false, size = S, exact = false) {
   const { curves, rows, instances } = buildScene(quads, evenodd);
   const rgba = await renderToRGBA({
     width: size,
@@ -89,6 +90,7 @@ async function ourCoverage(quads, evenodd = false, size = S) {
     rows,
     instances,
     instanceCount: 1,
+    exact,
   });
   const out = new Float64Array(size * size);
   for (let i = 0; i < out.length; i++) out[i] = rgba[i * 4] / 255;
@@ -287,9 +289,10 @@ const pct = (v) => `${(v * 100).toFixed(1)}%`;
 // `zoom` = {cx, cy, w, h, mag} for the crop; cx/cy default to the worst |ours−box| pixel.
 async function renderCase(name, title, quads, zoom, evenodd = false) {
   const ours = await ourCoverage(quads, evenodd);
+  const oursExact = await ourCoverage(quads, evenodd, S, true); // shader {exact:true} — supersampled fill
   const box = boxCoverage(quads, evenodd);
   const skia = skiaCoverage(quads, evenodd);
-  const dOB = absDiff(ours, box), dSB = absDiff(skia, box);
+  const dOB = absDiff(ours, box), dSB = absDiff(skia, box), dEB = absDiff(oursExact, box);
   const worst = worstPixel(dOB, S, S);
   const mask = dOB.map((d) => (d > 0.25 ? 1 : 0));
   const wrote = [];
@@ -312,20 +315,24 @@ async function renderCase(name, title, quads, zoom, evenodd = false) {
   wrote.push(writePNG(`${name}_zoom_box`, magnify(box, S, crop, mag, gray, mask)));
   wrote.push(writePNG(`${name}_zoom_skia`, magnify(skia, S, crop, mag, gray, mask)));
   wrote.push(writePNG(`${name}_zoom_diff`, magnify(dOB, S, crop, mag, heat, mask)));
+  wrote.push(writePNG(`${name}_zoom_exact`, magnify(oursExact, S, crop, mag, gray, mask))); // {exact:true} fix
 
   // report
-  const wi = worst.y * S + worst.x, dsb = worstPixel(dSB, S, S).d;
+  const wi = worst.y * S + worst.x, dsb = worstPixel(dSB, S, S).d, we = worstPixel(dEB, S, S);
   console.log(`\n▐ ${title}`);
   console.log(
     `  worst pixel (${worst.x},${worst.y}):  ours ${fx(ours[wi])}   box/truth ${fx(box[wi])}   skia ${
       fx(skia[wi])
-    }` +
-      `   →  ours is off by ${fx(worst.d)}`,
+    }   exact ${fx(oursExact[wi])}   →  fast off by ${fx(worst.d)}`,
   );
   console.log(
     `  |ours−box|:  mean ${fx(mean(dOB), 5)}   max ${fx(worst.d)}   pixels off >0.5: ${
       count(dOB, 0.5)
     }   >0.1: ${count(dOB, 0.1)}`,
+  );
+  console.log(
+    `  |exact−box|: mean ${fx(mean(dEB), 5)}   max ${fx(we.d)}   ← {exact:true} supersample fixes it ` +
+      `(residual is ${EXACT_GRID_NOTE})`,
   );
   console.log(
     `  |skia−box|:  mean ${fx(mean(dSB), 5)}   max ${fx(dsb)}   ` +
@@ -469,6 +476,7 @@ async function renderAmbiguity() {
   const e2 = [...rect(M, M, col + 0.25, N, +1), ...rect(M, M, col + 0.25, N, +1)]; // 25% of column, w=2
   const o1 = await ourCoverage(e1), b1 = boxCoverage(e1);
   const o2 = await ourCoverage(e2), b2 = boxCoverage(e2);
+  const x1 = await ourCoverage(e1, false, S, true), x2 = await ourCoverage(e2, false, S, true); // {exact:true}
   const i = row * S + col;
   const crop = { x: col - 4, y: 48, w: 9, h: 24 }, mag = 18;
   const wrote = [
@@ -478,14 +486,21 @@ async function renderAmbiguity() {
     writePNG('E_ambiguity_shapeA_box', magnify(b1, S, crop, mag, gray)),
     writePNG('E_ambiguity_shapeB_ours', magnify(o2, S, crop, mag, gray)),
     writePNG('E_ambiguity_shapeB_box', magnify(b2, S, crop, mag, gray)),
+    writePNG('E_ambiguity_shapeB_exact', magnify(x2, S, crop, mag, gray)),
   ];
   console.log(`\n▐ CASE E · same averaged winding F, different true coverage (no scalar fold can fix this)`);
   console.log(`  target column ${col}, F=0.5 for BOTH shapes:`);
-  console.log(`    E1 (edge, w=1, 50%):   ours ${fx(o1[i])}   box/truth ${fx(b1[i])}`);
-  console.log(`    E2 (doubled, w=2, 25%): ours ${fx(o2[i])}   box/truth ${fx(b2[i])}`);
+  console.log(`    E1 (edge, w=1, 50%):   fast ${fx(o1[i])}   exact ${fx(x1[i])}   box/truth ${fx(b1[i])}`);
+  console.log(`    E2 (doubled, w=2, 25%): fast ${fx(o2[i])}   exact ${fx(x2[i])}   box/truth ${fx(b2[i])}`);
   console.log(
-    `  ⇒ ours renders E1 and E2 IDENTICALLY (${fx(o1[i])} vs ${fx(o2[i])}), but the truths differ ` +
-      `(${fx(b1[i])} vs ${fx(b2[i])}). The information is gone before the fold.`,
+    `  ⇒ the FAST fold renders E1 and E2 IDENTICALLY (${fx(o1[i])} vs ${
+      fx(o2[i])
+    }) though the truths differ ` +
+      `(${fx(b1[i])} vs ${fx(b2[i])}) —`,
+  );
+  console.log(
+    `    the info is gone before a scalar fold. {exact:true} does NOT fold, so it tells them apart: ` +
+      `${fx(x1[i])} vs ${fx(x2[i])} (matches truth).`,
   );
   console.log(`  wrote: ${wrote.join(', ')}`);
 }
@@ -681,5 +696,16 @@ console.log(
   `  contours of inconsistent direction, duplicated/coincident contours, uncontrolled CAD/map/vector data.`,
 );
 console.log(
-  `\n  wrote ${Deno.realPathSync(outDir)}/  ·  open the PNGs to see each failure whole + magnified.`,
+  `  THE FIX (opt-in): the shader's {exact:true} path supersamples the true fill instead of folding a scalar,`,
+);
+console.log(
+  `  so A–E collapse to ~0 error above (residual = the 8×8 sub-sample grid). It is offline-only — much slower`,
+);
+console.log(
+  `  per pixel — and the fast fold is untouched when off (a uniform branch). See _zoom_exact.png per case.`,
+);
+console.log(
+  `\n  wrote ${
+    Deno.realPathSync(outDir)
+  }/  ·  open the PNGs to see each failure whole, magnified, and exact-fixed.`,
 );

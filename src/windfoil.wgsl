@@ -6,6 +6,7 @@ struct Uniforms {
   res : vec2<f32>,    // render-target size in pixels
   style : vec2<f32>,  // (gamma, sharp) coverage transform; (1, 1) = exact
   cam : vec4<f32>,    // camera: device px = worldPx·(scaleX, scaleY) + (transX, transY)
+  flags : vec4<f32>,  // x = exact-supersample mode (0 = fast fold, 1 = per-pixel exact); yzw reserved
 };
 
 struct Instance {
@@ -30,6 +31,12 @@ const ROW_XMAX : u32 = 4u;
 // it: bench/README.md, bench/ACCEL-NOTES.md.
 const MINIFICATION_GUARD = true;
 const GUARD_PX = 3.7;
+
+// Exact (opt-in, offline) mode samples the true fill on an EXACT_GRID×EXACT_GRID grid inside the pixel footprint
+// and averages — no scalar winding fold, so it is correct on the fold's failure cases (opposite-sign
+// cancellation, |w|>1, 3+ levels, even-odd across non-adjacent levels; docs/ALGORITHM.md §4). Cost is
+// EXACT_GRID² winding evaluations per pixel, so it is gated behind U.flags.x for static/print renders only.
+const EXACT_GRID : u32 = 8u;
 
 @group(0) @binding(0) var<uniform> U : Uniforms;
 @group(0) @binding(1) var<storage, read> instances : array<Instance>;
@@ -284,12 +291,89 @@ fn profile_face(band : vec4<f32>, bbox : vec4<f32>, rc : vec2<f32>, s : vec2<f32
   return ink;
 }
 
+// ── exact (opt-in) path ─────────────────────────────────────────────────────────────────────────────────
+// Signed winding W and crossing count K of a +x ray from `p` (glyph space), by ray-casting the pieces in the
+// single row band that contains p.y. Returns vec2(W, K). Curves are made rc-relative before the crossing test
+// (same as integrate_band) so the arithmetic keeps its precision away from the origin. This is the exact
+// per-sample fill test — the primitive the supersampled path averages, instead of folding one scalar.
+fn winding_at(band : vec4<f32>, rc : vec2<f32>, p : vec2<f32>) -> vec2<i32> {
+  let rowBase = u32(band.x);
+  let R = u32(band.y);
+  let invH = band.w;                              // band.z is the band-origin y0
+  var ri : u32 = 0u;
+  if (invH > 0.0) { ri = band_index(p.y - band.z, invH, R); }
+  let rIdx = (rowBase + ri) * ROW_STRIDE;
+  let start = rows[rIdx];
+  let count = rows[rIdx + 1u];
+  let pr = p - rc;
+  var W : i32 = 0;
+  var K : i32 = 0;
+  for (var i : u32 = 0u; i < count; i = i + 1u) {
+    let base = (start + i) * 3u;
+    let q1 = curves[base] - rc;
+    let q2 = curves[base + 1u] - rc;
+    let q3 = curves[base + 2u] - rc;
+    let ylo = min(q1.y, q3.y);
+    let yhi = max(q1.y, q3.y);
+    if (pr.y < ylo || pr.y >= yhi) { continue; }   // half-open in y → no double count at shared endpoints
+    // y-monotone piece: y(t) = q1.y + a1y·t + a2y·t² = pr.y has one root in [0,1].
+    let a2 = q1 - 2.0 * q2 + q3;
+    let a1 = 2.0 * (q2 - q1);
+    let c = q1.y - pr.y;
+    var t : f32;
+    if (abs(a2.y) < 1e-12 * max(abs(a1.y), 1.0)) {
+      t = -c / a1.y;
+    } else {
+      let disc = max(a1.y * a1.y - 4.0 * a2.y * c, 0.0);
+      let sq = sqrt(disc);
+      let qd = -0.5 * (a1.y + select(-sq, sq, a1.y >= 0.0));   // numerically stable quadratic
+      let r1 = qd / a2.y;
+      let r2 = select(0.0, c / qd, qd != 0.0);
+      t = select(r2, r1, r1 >= 0.0 && r1 <= 1.0);              // the monotone root lands in [0,1]
+    }
+    t = clamp(t, 0.0, 1.0);
+    let x = (a2.x * t + a1.x) * t + q1.x;
+    if (x > pr.x) {
+      K = K + 1;
+      let dy = 2.0 * a2.y * t + a1.y;                          // crossing direction fixes the winding sign
+      W = W + select(-1, 1, dy >= 0.0);
+    }
+  }
+  return vec2<i32>(W, K);
+}
+
+// Exact box-filter coverage: fraction of an EXACT_GRID×EXACT_GRID sample grid over the pixel footprint whose
+// true winding satisfies the fill rule. No fold — so it is correct wherever the scalar fold is not (§4).
+fn exact_coverage(band : vec4<f32>, fillRule : f32, rc : vec2<f32>, s : vec2<f32>) -> f32 {
+  let n = EXACT_GRID;
+  let inv = 1.0 / f32(n);
+  let evenodd = fillRule > 0.5;
+  var inside : u32 = 0u;
+  for (var j : u32 = 0u; j < n; j = j + 1u) {
+    for (var i : u32 = 0u; i < n; i = i + 1u) {
+      let off = (vec2<f32>(f32(i), f32(j)) + 0.5) * inv - 0.5;  // centred sub-sample in [-0.5, 0.5)
+      let wk = winding_at(band, rc, rc + off * s);
+      let hit = select(wk.x != 0, (wk.y & 1) == 1, evenodd);   // nonzero: W≠0 · even-odd: odd crossings
+      inside = inside + select(0u, 1u, hit);
+    }
+  }
+  return f32(inside) / f32(n * n);
+}
+
 @fragment
 fn fs(in : VsOut) -> @location(0) vec4<f32> {
   let I = instances[in.inst];
   let rc = in.rc;
   // units_per_pixel from the screen-space gradients — the device pixel's preimage under scale/translation.
   let s = max(fwidth(rc), vec2<f32>(1e-9));
+
+  // Exact (opt-in) path: supersample the true fill; correct on the winding-fold's failure cases, at
+  // EXACT_GRID² winding evals per pixel. Skips both the fold and the minification guard. Uniform branch,
+  // so the fast path below is unaffected when exact is off.
+  if (U.flags.x > 0.5) {
+    let cov = exact_coverage(I.band, I.place.w, rc, s);
+    return shade(I.color, style_coverage(cov, U.style.x, U.style.y));
+  }
 
   if (MINIFICATION_GUARD && all(s * GUARD_PX >= I.bbox.zw - I.bbox.xy)) {
     return fold_shade(profile_face(I.band, I.bbox, rc, s) / (s.x * s.y), I.place.w, I.color);
