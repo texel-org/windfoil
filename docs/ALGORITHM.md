@@ -111,10 +111,13 @@ Normalize $F = \left( \sum_e A_e \right) / (s_x s_y)$, the pixel-averaged windin
 - **even-odd:** $\text{coverage} = \text{tri}(F)$, the period-2 triangle wave.
 
 For a pixel spanning two adjacent winding levels (ordinary edge pixels) this is the exact box-filtered
-coverage. For a pixel with opposite-sign winding cancellation or three or more winding levels at once, the fold
-is a saturating-area approximation — the same coverage model production signed-area renderers use (Skia,
-Vello; see §8). So the integral is exact for the averaged winding number; the
-fold is exact only under the usual local-winding assumptions.
+coverage. Every other failure is the same one issue: the fold is a function of the single scalar $F$, so it is
+exact only where a pixel's winding is $\{0, \pm 1\}$ — opposite-sign overlap, $|w| > 1$ (duplicated, overlapping,
+or self-intersecting contours), and even-odd across non-adjacent levels all break that and read as a
+saturating-area approximation. This is the per-pixel limit of signed-area _accumulation_ rasterizers (font-rs,
+Vello), which clamp the same averaged winding; a full coverage rasterizer like Skia resolves these clean cases
+exactly and only deviates alongside us at sharp self-intersection slivers (§8). So the integral is exact for the
+averaged winding number; the fold is exact only under the usual local-winding assumptions.
 
 ---
 
@@ -200,8 +203,10 @@ atlas/SDF methods bake it at a fixed resolution; supersampling reaches it only i
 
 Honest weaknesses:
 
-- **Winding fold** is exact only where a pixel spans ≤ 2 adjacent winding levels; self-intersections and extreme
-  minification deviate (Skia and Vello make the same trade — §4).
+- **Winding fold** is exact only where a pixel spans ≤ 2 adjacent winding levels; opposite-sign overlap, $|w| > 1$,
+  self-intersections, and extreme minification deviate — the limit signed-area _accumulation_ rasterizers (font-rs,
+  Vello) share, though Skia's coverage rasterizer resolves the clean cases and only deviates at sharp
+  self-intersection slivers (§4).
 - **Rotated / sheared transforms** integrate over the pixel's local preimage, not the device pixel — shared by
   every local-space analytic method.
 - **Deep-zoom float precision** wobbles AA edge positions far from the origin; interiors stay solid. Fix with de
