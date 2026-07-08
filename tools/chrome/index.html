@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>windfoil — Chrome vs @napi-rs/canvas</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      body { margin: 0; padding: 24px; font: 13px/1.5 var(--mono); background: #14110c; color: #e9e3d5; }
+      h1 { font-size: 15px; font-weight: 700; margin: 0 0 4px; }
+      p.sub { margin: 0 0 20px; opacity: 0.7; max-width: 80ch; }
+      #status { margin: 0 0 20px; padding: 8px 12px; border-radius: 4px; background: #2a251b; white-space: pre-wrap; }
+      table { border-collapse: collapse; margin: 8px 0 28px; }
+      th, td { padding: 4px 12px; text-align: right; border-bottom: 1px solid #3a3428; }
+      th:first-child, td:first-child { text-align: left; }
+      thead th { border-bottom: 2px solid #5a5240; }
+      td.num { font-variant-numeric: tabular-nums; }
+      .hi { color: #ffb27a; } /* the headline column: chrome vs napi */
+      .grid { display: grid; grid-template-columns: repeat(3, auto); gap: 4px 14px; align-items: center; }
+      .grid .head { opacity: 0.6; padding-bottom: 2px; }
+      .row-label { grid-column: 1 / -1; margin-top: 14px; opacity: 0.85; }
+      canvas.cell { width: 128px; height: 128px; image-rendering: pixelated; border: 1px solid #3a3428; background: #000; }
+      .cap { font-size: 11px; opacity: 0.6; text-align: center; }
+    </style>
+    <!-- Same trick as the root page: map opentype.js (a bare specifier the shared src/*.js use) to an ESM build
+         so the browser resolves what Deno resolves. tools/util.js and src/*.js are loaded by relative path. -->
+    <script type="importmap">
+      { "imports": { "opentype.js": "https://esm.sh/opentype.js@1.3.5" } }
+    </script>
+  </head>
+  <body>
+    <h1>windfoil — Chrome &lt;canvas&gt; vs @napi-rs/canvas</h1>
+    <p class="sub">
+      Renders the validate.js shape set with Chrome's Canvas 2D and diffs it against the napi-rs (Skia) coverage
+      captured by <code>deno task validate</code>, pixel-for-pixel. "chrome vs napi" is the direct disagreement
+      between the two Skia builds; "chrome vs box" mirrors validate's "skia vs box" column so you can cross-check
+      the terminal. Numbers and a per-shape breakdown are also logged to the console.
+    </p>
+    <div id="status">initializing…</div>
+    <div id="table"></div>
+    <div id="panels" class="grid"></div>
+
+    <script type="module">
+      import {
+        S, F, makeShapes, ourCoverage, canvasCoverage, boxCoverage, stats, slug,
+      } from '../util.js';
+      import { parseFont } from '../../src/font.js';
+
+      const AMP = 15; // diff-heatmap gain, matches validate.js
+      const statusEl = document.getElementById('status');
+      const setStatus = (t) => (statusEl.textContent = t);
+
+      // A Canvas 2D context backed by an S×S <canvas> element — the browser's Skia, the thing under test.
+      function browserCtx() {
+        const c = document.createElement('canvas');
+        c.width = S; c.height = S;
+        return c.getContext('2d', { willReadFrequently: true });
+      }
+
+      // Small helpers to visualize a coverage array: grayscale (white = covered), and an amplified |Δ| heatmap.
+      function show(cov, cap) {
+        const c = document.createElement('canvas');
+        c.width = S; c.height = S; c.className = 'cell';
+        const img = c.getContext('2d').createImageData(S, S);
+        for (let i = 0; i < cov.length; i++) {
+          const v = Math.round(cov[i] * 255);
+          img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v; img.data[i * 4 + 3] = 255;
+        }
+        c.getContext('2d').putImageData(img, 0, 0);
+        return withCaption(c, cap);
+      }
+      function showDiff(a, b, cap) {
+        const c = document.createElement('canvas');
+        c.width = S; c.height = S; c.className = 'cell';
+        const img = c.getContext('2d').createImageData(S, S);
+        for (let i = 0; i < a.length; i++) {
+          const v = Math.round(Math.min(Math.abs(a[i] - b[i]) * AMP, 1) * 255);
+          img.data[i * 4] = v; img.data[i * 4 + 1] = Math.round(v * 0.28); img.data[i * 4 + 2] = Math.round(v * 0.12);
+          img.data[i * 4 + 3] = 255;
+        }
+        c.getContext('2d').putImageData(img, 0, 0);
+        return withCaption(c, cap);
+      }
+      function withCaption(canvas, cap) {
+        const wrap = document.createElement('div');
+        wrap.appendChild(canvas);
+        const p = document.createElement('div'); p.className = 'cap'; p.textContent = cap;
+        wrap.appendChild(p);
+        return wrap;
+      }
+
+      async function main() {
+        // Font: fetch the same .ttf validate.js reads off disk, parse with the shared (env-agnostic) parser.
+        setStatus('loading font…');
+        const fontBuf = await fetch(new URL('../../assets/Lato-Regular.ttf', import.meta.url)).then((r) => r.arrayBuffer());
+        const font = parseFont(fontBuf);
+        const SHAPES = makeShapes(font);
+
+        // napi-rs reference (written by `deno task validate`). Optional: without it we still show chrome-vs-box.
+        setStatus('loading napi-rs reference (output/validation/skia-ref.json)…');
+        let ref = null;
+        try {
+          ref = await fetch(new URL('../../output/validation/skia-ref.json', import.meta.url)).then((r) => {
+            if (!r.ok) throw new Error(r.status);
+            return r.json();
+          });
+        } catch {
+          console.warn('No skia-ref.json — run `deno task validate` first for the direct chrome-vs-napi diff.');
+        }
+
+        // Is WebGPU available for the "ours" (shader) column? Optional extra, guarded so the page works without it.
+        let webgpuOk = false;
+        try { webgpuOk = !!(await navigator.gpu?.requestAdapter()); } catch { /* none */ }
+
+        const panels = document.getElementById('panels');
+        const rows = [];
+        for (const [label, quads, evenodd] of SHAPES) {
+          setStatus(`rendering "${label}"…`);
+          const s = slug(label);
+          const chrome = canvasCoverage(quads, evenodd, browserCtx());
+          const box = boxCoverage(quads, evenodd);
+          const napi = ref?.shapes[s] ? Float64Array.from(ref.shapes[s].skia, (v) => v / 255) : null;
+          let ours = null;
+          if (webgpuOk) { try { ours = await ourCoverage(quads, evenodd); } catch (e) { console.warn('ours failed', label, e); } }
+
+          const cn = napi ? stats(chrome, napi) : null; // headline: chrome vs napi
+          const cb = stats(chrome, box);
+          const ob = ours ? stats(ours, box) : null;
+          rows.push({
+            shape: label,
+            'chrome↔napi mean': cn ? +cn.mean.toFixed(5) : null,
+            'chrome↔napi max': cn ? +cn.max.toFixed(5) : null,
+            'chrome↔box mean': +cb.mean.toFixed(5),
+            'chrome↔box max': +cb.max.toFixed(5),
+            'ours↔box mean': ob ? +ob.mean.toFixed(5) : null,
+            'ours↔box max': ob ? +ob.max.toFixed(5) : null,
+          });
+
+          // Visual row: chrome render, napi render (from ref), amplified diff.
+          const lab = document.createElement('div'); lab.className = 'row-label'; lab.textContent = label; panels.appendChild(lab);
+          panels.appendChild(show(chrome, 'chrome'));
+          if (napi) { panels.appendChild(show(napi, 'napi-rs')); panels.appendChild(showDiff(chrome, napi, `|Δ|×${AMP}`)); }
+          else { const g = document.createElement('div'); g.textContent = '(no napi ref)'; g.className = 'cap'; panels.appendChild(g); panels.appendChild(document.createElement('div')); }
+        }
+
+        renderTable(rows, !!ref, webgpuOk);
+        logSummary(rows, !!ref, webgpuOk);
+        setStatus(
+          `done · ${SHAPES.length} shapes · ${S}px cell` +
+            (ref ? ' · diffed against napi-rs reference' : ' · no napi ref (ran `deno task validate`?)') +
+            (webgpuOk ? ' · WebGPU on' : ' · WebGPU off'),
+        );
+      }
+
+      function mean(rows, key) {
+        const v = rows.map((r) => r[key]).filter((x) => x != null);
+        return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+      }
+      function maxOf(rows, key) {
+        const v = rows.map((r) => r[key]).filter((x) => x != null);
+        return v.length ? Math.max(...v) : null;
+      }
+
+      function renderTable(rows, hasRef, hasGpu) {
+        const cols = [
+          ['shape', 'shape', false],
+          ['chrome↔napi mean', 'mean', hasRef], ['chrome↔napi max', 'max', hasRef],
+          ['chrome↔box mean', 'mean', true], ['chrome↔box max', 'max', true],
+          ['ours↔box mean', 'mean', hasGpu], ['ours↔box max', 'max', hasGpu],
+        ];
+        const groups = [['', 1], ['chrome vs napi', hasRef ? 2 : 0], ['chrome vs box', 2], ['ours vs box', hasGpu ? 2 : 0]];
+        const fmt = (v) => (v == null ? '—' : v.toFixed(5));
+        let html = '<table><thead><tr>';
+        for (const [name, span] of groups) if (span) html += `<th colspan="${span}"${name.includes('napi') ? ' class="hi"' : ''}>${name}</th>`;
+        html += '</tr><tr>';
+        for (const [key, head, on] of cols) if (on) html += `<th${key.includes('napi') ? ' class="hi"' : ''}>${head}</th>`;
+        html += '</tr></thead><tbody>';
+        const totals = { shape: 'mean (max)' };
+        for (const [key, , on] of cols.slice(1)) if (on) totals[key] = null;
+        for (const r of rows) {
+          html += '<tr>';
+          for (const [key, , on] of cols) if (on) html += `<td class="num${key.includes('napi') ? ' hi' : ''}">${key === 'shape' ? r[key] : fmt(r[key])}</td>`;
+          html += '</tr>';
+        }
+        html += '<tr style="border-top:2px solid #5a5240">';
+        for (const [key, , on] of cols) {
+          if (!on) continue;
+          if (key === 'shape') { html += '<td>mean</td>'; continue; }
+          const agg = key.endsWith('max') ? maxOf(rows, key) : mean(rows, key);
+          html += `<td class="num${key.includes('napi') ? ' hi' : ''}">${fmt(agg)}</td>`;
+        }
+        html += '</tr></tbody></table>';
+        document.getElementById('table').innerHTML = html;
+      }
+
+      function logSummary(rows, hasRef, hasGpu) {
+        console.log('%cwindfoil — Chrome <canvas> vs @napi-rs/canvas', 'font-weight:bold;font-size:13px');
+        console.table(rows);
+        if (hasRef) {
+          console.log(
+            `chrome vs napi (direct): mean ${mean(rows, 'chrome↔napi mean').toFixed(5)}, ` +
+              `worst-pixel max ${maxOf(rows, 'chrome↔napi max').toFixed(5)}.`,
+          );
+          console.log('→ ~0 means Chrome and napi-rs Skia agree; a nonzero mean is the cross-build AA difference you\'ve seen.');
+        } else {
+          console.log('No napi-rs reference loaded — run `deno task validate`, then reload. Showing chrome-vs-box only.');
+        }
+        console.log(`chrome vs box: mean ${mean(rows, 'chrome↔box mean').toFixed(5)} — compare to validate's "skia vs box" in the terminal.`);
+        if (hasGpu) console.log(`ours (WebGPU shader) vs box: mean ${mean(rows, 'ours↔box mean').toFixed(5)}.`);
+      }
+
+      main().catch((e) => { setStatus('error: ' + (e?.message || e)); console.error(e); });
+    </script>
+  </body>
+</html>
