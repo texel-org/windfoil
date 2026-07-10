@@ -138,6 +138,12 @@ glyph 'o' (with hole)     0.00006   0.014    0.00231   0.340
 star {5/2} even-odd       0.00017   0.100    0.00111   0.090
 ```
 
+**On the deltas and exactness.** The non-zero numbers above are the reference and the readback, not the
+algorithm's error: `box` is a 24×24 point sample (its own ~1/F noise means no exact method scores 0 against it),
+and renders are compared at 8-bit. Against an _exact_ analytic box filter instead, the rotated square agrees to a
+mean of 2.5×10⁻⁵ and never more than one code value per pixel — the shader reproduces the box filter exactly, up
+to 8-bit and f32 rounding. The one real deviation is the winding fold (§4), which the `star {5/2}` maxes measure.
+
 On ordinary fills the shader matches the point-sampled box filter to within its own sampling noise
 (max ≲ 0.02). Skia sits further off because it flattens curves to line segments (its circle deviation shrinks
 as arc count rises; the test uses 64 arcs) and its edge AA is its own model. The self-intersecting star is the
