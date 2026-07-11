@@ -226,6 +226,11 @@ Core-algorithm changes tuned with this harness (all coverage-preserving where ex
 - **Footprint via `fwidth`** instead of per-axis `length()`: −2 sqrt per fragment, bit-identical under the
   axis-aligned camera, and the same measure the reference Slug uses.
 - **`BAND_SORT_MIN` 8 → 4**: the sorted early-break pays for itself on nearly any band (tiger −4–5%).
+- **Lazy control-point load** (`integrate_band`): the x-hull tests need only the endpoints (xy-monotone ⇒ the
+  control lies within the endpoint span — the same invariant the y-span already uses), so `q2` loads only for
+  pieces that actually cross the box. Far-left / far-right / y-disjoint pieces never touch it. Bit-exact
+  (0 control-outside-span pieces across the glyph, shape, and tiger atlases); −2–3% across zooms, most at
+  magnified sizes where more pieces are hull-rejected.
 - **`mono_root` branch pick via sign(a1)** instead of evaluating the derivative at the root (they're
   algebraically equal picks): shape mid-zooms −2–4%.
 

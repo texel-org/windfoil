@@ -55,6 +55,13 @@ not default.
 - **Footprint via `fwidth`** instead of two `length()` calls: −2 sqrt/fragment, bit-identical under
   axis-aligned cameras, same measure as the reference Slug.
 - **`BAND_SORT_MIN` 8 → 4**: early break pays on nearly any band (tiger −4–5%; sort is build-time only).
+- **Lazy control-point load** (`integrate_band`): drop `q2` from the x-hull min/max (xy-monotone ⇒ control
+  within the endpoint span, the invariant the y-span min/max already assume) and load it only right before
+  `integrate_piece`, so far-left/right/y-disjoint pieces skip the read. −2–3% across zooms (most at magnified
+  sizes, where hull rejection is common). Bit-exact: a CPU scan finds 0 control-outside-span pieces across the
+  glyph/shape/tiger atlases (de Casteljau subdivision yields exact convex-combination controls), so the
+  endpoint hull equals the 3-point hull. This is a *load* deferral, not a band-level skip — distinct from the
+  rejected band-level x-hull skips below, which added row loads and live values.
 - **`mono_root` pick via sign(a1)**: the derivative at the q-form root is −sign(a1)·√disc, so the branch
   pick needs no derivative eval (shape mid-zooms −2–4%).
 - **`TARGET_PER_BAND` 6 → 10** (earlier round): ~8–19% at small/medium, ~15% smaller atlas.

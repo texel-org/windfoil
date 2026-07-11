@@ -177,9 +177,8 @@ fn integrate_band(start : u32, count : u32, rc : vec2<f32>, wlo : f32, whi : f32
   for (var i : u32 = 0u; i < count; i = i + 1u) {
     let base = (start + i) * 3u;
     let q1 = curves[base] - rc;
-    let q2 = curves[base + 1u] - rc;
     let q3 = curves[base + 2u] - rc;
-    let x_hull_max = max(q1.x, max(q2.x, q3.x));
+    let x_hull_max = max(q1.x, q3.x);
     if (x_hull_max <= -hx) {              // fully LEFT of the box → no area
       if (sorted) { break; }
       continue;
@@ -189,7 +188,7 @@ fn integrate_band(start : u32, count : u32, rc : vec2<f32>, wlo : f32, whi : f32
     let lo = max(wlo, py_lo);
     let hi = min(whi, py_hi);
     if (hi <= lo) { continue; }
-    let x_hull_min = min(q1.x, min(q2.x, q3.x));
+    let x_hull_min = min(q1.x, q3.x);
     if (x_hull_min >= hx) {               // fully RIGHT of the box → full width × clipped y-span
       acc += sx * clipped_dy(q1.y, q3.y, wlo, whi);
       continue;
@@ -201,6 +200,7 @@ fn integrate_band(start : u32, count : u32, rc : vec2<f32>, wlo : f32, whi : f32
       acc += xm * clipped_dy(q1.y, q3.y, wlo, whi);
       continue;
     }
+    let q2 = curves[base + 1u] - rc;   // deferred: only crossing pieces need the control point
     acc += integrate_piece(q1, q2, q3, lo, hi, hx);
   }
   return acc;
