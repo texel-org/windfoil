@@ -50,8 +50,21 @@ not default.
 
 ## Kept: smaller things
 
-- **AA pad 2px → 1px** (both vertex shaders): coverage reaches only half a pixel past the ink, and the pad
-  ring dominates small instances' fragment count — ~20–35% below 16px, no visual change.
+- **AA pad = kernel support radius, per-axis** (`KERNEL_SUPPORT_PX`, both vertex shaders): the pad must equal
+  the reconstruction kernel's support so the AA skirt isn't clipped, and nothing more. Coverage is a 1-device-px
+  **box** filter (∫∫ over rc ± s/2), whose support radius is *exactly* half a device px — so pad = 0.5px is the
+  derived value, no magic constant, down from the old blanket 1px. The pad ring dominates small-instance
+  fragment count: 2→1 was ~20–35% below 16px; 1→0.5 per-axis is another ~−11% at glyphs 8px, −3–4% on small
+  tiger/shape, neutral at large sizes. **No fudge margin**: an earlier draft used 0.5 + 0.125 to paper over a
+  fwidth edge effect, but that 0.125 was itself unprincipled (fwidth over-estimates the footprint at a
+  primitive's edge — a GPU-derivative slack with no closed form). A subpixel-swept clip test
+  (glyphs/shape/hairlines, incl. axis-aligned edges, vs an un-clippable 2px reference) shows 0.5px and 0.625px
+  are indistinguishable: both cap at 1/255 at a few *scattered* pixels — the same rounding floor the 1px pad
+  already had — never a contiguous line. So the fudge bought nothing; pad is the plain support radius.
+  **Kernel-dependent**: 0.5 is the *box* radius — a tent (1px), cubic/Mitchell (2px), or truncated Gaussian (Nσ)
+  must raise `KERNEL_SUPPORT_PX` to its own support or the skirt clips (relevant if pluggable kernels land). Also
+  switched from a scalar `1/camScale.x` to per-axis `abs(camScale)`, which fixes anisotropic / reflected cameras
+  (the old form mis-padded y when scaleX ≠ scaleY).
 - **Footprint via `fwidth`** instead of two `length()` calls: −2 sqrt/fragment, bit-identical under
   axis-aligned cameras, same measure as the reference Slug.
 - **`BAND_SORT_MIN` 8 → 4**: early break pays on nearly any band (tiger −4–5%; sort is build-time only).

@@ -221,8 +221,16 @@ Core-algorithm changes tuned with this harness (all coverage-preserving where ex
   Glyphs @2px **45 → 1.7 ms**, @4px **11.8 → 0.44 ms** (windfoil flips from ~5× slower than Slug to ~5× faster);
   ≥ 8px em bit-identical for full-x-height glyphs, but small-ink punctuation is approximated higher (Lato `.` to
   ~29.5px em, `,` ~14.6px, `-` ~15.0px) since the gate is the ink box, not the em.
-- **AA pad 2px → 1px** (both vertex shaders — coverage only reaches half a pixel past the ink). The pad ring
-  dominates small instances' fragment count: ~20–35% faster below 16px for _both_ algorithms, no visual change.
+- **AA pad = kernel support radius, per-axis** (both vertex shaders, `KERNEL_SUPPORT_PX`). The pad must equal
+  the reconstruction kernel's support so the AA skirt isn't clipped, and nothing more. For the **box filter**
+  that radius is *exactly* half a device px (coverage is ∫∫ over the 1px footprint), so the pad is a derived
+  `0.5px` — down from the old blanket 1px, no fudge constant. The pad ring dominates small instances' fragment
+  count: 2→1 was ~20–35% below 16px, and 1px→0.5px is another ~−11% at glyphs 8px, −3–4% on small tiger/shape,
+  neutral at large sizes. A subpixel-swept clip test (glyphs/shape/hairlines, incl. axis-aligned edges) shows
+  0.5px clips at most 1/255 at a few scattered pixels — the same geometry-rounding floor the 1px pad already
+  sat at, never a contiguous line — so no visual change. `KERNEL_SUPPORT_PX` is the **box** radius: a wider
+  kernel (tent 1px, cubic 2px, Gaussian Nσ) must raise it. Per-axis `abs(camScale)` also fixes anisotropic /
+  reflected cameras that the old scalar `camScale.x` pad mis-padded vertically.
 - **Footprint via `fwidth`** instead of per-axis `length()`: −2 sqrt per fragment, bit-identical under the
   axis-aligned camera, and the same measure the reference Slug uses.
 - **`BAND_SORT_MIN` 8 → 4**: the sorted early-break pays for itself on nearly any band (tiger −4–5%).

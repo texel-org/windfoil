@@ -47,16 +47,17 @@ struct VsOut {
   @location(1) @interpolate(flat) inst : u32,
 };
 
-// Vertex stage — byte-for-byte identical to windfoil.wgsl (same instanced unit quad, same 1px pad, same
+// Vertex stage — byte-for-byte identical to windfoil.wgsl (same instanced unit quad, same per-axis pad, same
 // camera), so the two shaders differ only in the fragment coverage computation.
 @vertex
 fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VsOut {
   let I = instances[ii];
   let unitsToPx = I.place.z;
   let camScale = U.cam.xy;
-  let pad = 1.0 / (unitsToPx * max(camScale.x, 1e-6)); // 1px AA skirt — see windfoil.wgsl vs()
-  let lo = I.bbox.xy - vec2<f32>(pad);
-  let hi = I.bbox.zw + vec2<f32>(pad);
+  // pad = box-filter support radius (½ device px); see windfoil.wgsl KERNEL_SUPPORT_PX.
+  let pad = vec2<f32>(0.5) / (unitsToPx * max(abs(camScale), vec2<f32>(1e-6)));
+  let lo = I.bbox.xy - pad;
+  let hi = I.bbox.zw + pad;
   let uv = vec2<f32>(f32(vi & 1u), f32((vi >> 1u) & 1u));
   let em = mix(lo, hi, uv);
   let worldPx = I.place.xy + em * unitsToPx;

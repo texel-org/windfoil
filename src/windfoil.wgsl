@@ -31,6 +31,16 @@ const ROW_XMAX : u32 = 4u;
 const MINIFICATION_GUARD = true;
 const GUARD_PX = 3.7;
 
+// AA quad pad = the reconstruction kernel's support radius, in device px. Coverage here is a 1-device-px BOX
+// filter (∫∫ over the footprint rc ± s/2), whose support radius is exactly half a device pixel — so a 0.5px
+// ring is the mathematically exact pad: it captures every pixel whose footprint overlaps the ink, and anything
+// larger only over-draws. This 0.5 is the BOX filter's radius; a wider reconstruction kernel (tent = 1px,
+// cubic/Mitchell = 2px, truncated Gaussian = Nσ) MUST raise it to its own support or the AA skirt clips.
+// (No fudge margin: a subpixel-swept clip test — glyphs/shape/hairlines, incl. axis-aligned edges — shows 0.5px
+// clips at most 1/255 at a few scattered pixels, the same geometry-rounding floor the old 1px pad already sat
+// at, never a contiguous line. See bench/ACCEL-NOTES.md.)
+const KERNEL_SUPPORT_PX = 0.5;
+
 @group(0) @binding(0) var<uniform> U : Uniforms;
 @group(0) @binding(1) var<storage, read> instances : array<Instance>;
 // Curve atlas: three consecutive vec2 per xy-monotone piece (endpoints + control).
@@ -49,10 +59,11 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VsO
   let I = instances[ii];
   let unitsToPx = I.place.z;
   let camScale = U.cam.xy;
-  // 1 device px pad so the AA skirt is never clipped (coverage reaches at most half a pixel past the ink).
-  let pad = 1.0 / (unitsToPx * max(camScale.x, 1e-6));
-  let lo = I.bbox.xy - vec2<f32>(pad);
-  let hi = I.bbox.zw + vec2<f32>(pad);
+  // Pad the ink box by the kernel support radius so the AA skirt is never clipped (derivation at the constant).
+  // Per-axis in device px — not a scalar off camScale.x — so anisotropic / reflected cameras pad both axes.
+  let pad = vec2<f32>(KERNEL_SUPPORT_PX) / (unitsToPx * max(abs(camScale), vec2<f32>(1e-6)));
+  let lo = I.bbox.xy - pad;
+  let hi = I.bbox.zw + pad;
   // Unit-quad corners for a triangle-strip; vi ∈ {0..3}.
   let uv = vec2<f32>(f32(vi & 1u), f32(vi >> 1u));
   let em = mix(lo, hi, uv);
