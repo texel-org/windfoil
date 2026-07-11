@@ -228,6 +228,10 @@ Core-algorithm changes tuned with this harness (all coverage-preserving where ex
 - **`BAND_SORT_MIN` 8 → 4**: the sorted early-break pays for itself on nearly any band (tiger −4–5%).
 - **`mono_root` branch pick via sign(a1)** instead of evaluating the derivative at the root (they're
   algebraically equal picks): shape mid-zooms −2–4%.
+- **`mono_root` single division**: the root pick is a sign test on a1 known before either division, so select
+  the chosen root's numerator/denominator and divide once instead of computing both `qq/a2` and `c/qq`.
+  Bit-exact (a2 ≠ 0 past the near-linear fallback); shape (solve-heavy) −2–5%, glyphs/tiger neutral. Unlike the
+  rejected `select`-flattening below, this removes real ALU (a division) rather than adding compares.
 
 Also measured and rejected (see ACCEL-NOTES): band-level x-hull skips in the exact gather and
 flat-interpolated instance data — both slowed the hot path more than they saved. Earlier rejects (straight-piece

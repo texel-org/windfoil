@@ -57,6 +57,12 @@ not default.
 - **`BAND_SORT_MIN` 8 → 4**: early break pays on nearly any band (tiger −4–5%; sort is build-time only).
 - **`mono_root` pick via sign(a1)**: the derivative at the q-form root is −sign(a1)·√disc, so the branch
   pick needs no derivative eval (shape mid-zooms −2–4%).
+- **`mono_root` single division**: with the pick already a sign test on a1, select the chosen root's
+  numerator/denominator and divide once instead of evaluating both `qq/a2` and `c/qq`. Bit-exact (a2 ≠ 0 past
+  the near-linear fallback; qq-guard preserves the old `c/qq` select). Shape −2–5%, glyphs/tiger neutral.
+  Note this is the *opposite* of the rejected `select`-flattening below: it removes a division (real ALU),
+  where that added always-evaluated compares — branches that skip work still beat branchless, but dropping a
+  division is a uniform win.
 - **`TARGET_PER_BAND` 6 → 10** (earlier round): ~8–19% at small/medium, ~15% smaller atlas.
 
 ## Rejected in round 2 (same bloat rule)

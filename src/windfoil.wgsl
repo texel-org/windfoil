@@ -119,10 +119,15 @@ fn mono_root(a2 : f32, a1 : f32, a0 : f32, e1 : f32, v : f32, rising : bool) -> 
   let disc = max(a1 * a1 - 4.0 * a2 * c, 0.0);
   let sq = sqrt(disc);
   let qq = -0.5 * (a1 + select(-sq, sq, a1 >= 0.0));   // numerically stable quadratic
-  let r1 = qq / a2;
-  let r2 = select(0.0, c / qq, qq != 0.0);
-  // The derivative at r1 is −sign(a1)·sq, so the branch pick reduces to a sign test on a1.
-  let t = select(r2, r1, (a1 < 0.0) == rising);
+  // The two roots are r1 = qq/a2 and r2 = c/qq; the derivative at r1 is −sign(a1)·sq, so the pick reduces to a
+  // sign test on a1. Select the chosen root's numerator/denominator BEFORE dividing so only one division runs.
+  // a2 ≠ 0 here (the near-linear fallback returned above), so the r1 branch reproduces qq/a2 exactly; the
+  // denominator guard reproduces the old r2 = select(0, c/qq, qq != 0) when the r2 branch is taken.
+  let use_r1 = (a1 < 0.0) == rising;
+  let num = select(c, qq, use_r1);
+  let den = select(qq, a2, use_r1);
+  let ok = den != 0.0;
+  let t = select(0.0, num / select(1.0, den, ok), ok);
   return clamp(t, 0.0, 1.0);
 }
 
