@@ -31,6 +31,10 @@ const ROW_XMAX : u32 = 4u;
 const MINIFICATION_GUARD = true;
 const GUARD_PX = 3.7;
 
+// Kernel support plus 0.125px derivative slack; adjust support per axis for other kernels.
+const KERNEL_SUPPORT_PX = vec2<f32>(0.5);
+const KERNEL_SKIRT_PX = KERNEL_SUPPORT_PX + vec2<f32>(0.125);
+
 @group(0) @binding(0) var<uniform> U : Uniforms;
 @group(0) @binding(1) var<storage, read> instances : array<Instance>;
 // Curve atlas: three consecutive vec2 per xy-monotone piece (endpoints + control).
@@ -49,10 +53,9 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VsO
   let I = instances[ii];
   let unitsToPx = I.place.z;
   let camScale = U.cam.xy;
-  // 1 device px pad so the AA skirt is never clipped (coverage reaches at most half a pixel past the ink).
-  let pad = 1.0 / (unitsToPx * max(camScale.x, 1e-6));
-  let lo = I.bbox.xy - vec2<f32>(pad);
-  let hi = I.bbox.zw + vec2<f32>(pad);
+  let pad = KERNEL_SKIRT_PX / (unitsToPx * max(abs(camScale), vec2<f32>(1e-6)));
+  let lo = I.bbox.xy - pad;
+  let hi = I.bbox.zw + pad;
   // Unit-quad corners for a triangle-strip; vi ∈ {0..3}.
   let uv = vec2<f32>(f32(vi & 1u), f32(vi >> 1u));
   let em = mix(lo, hi, uv);

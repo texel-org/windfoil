@@ -221,8 +221,8 @@ Core-algorithm changes tuned with this harness (all coverage-preserving where ex
   Glyphs @2px **45 → 1.7 ms**, @4px **11.8 → 0.44 ms** (windfoil flips from ~5× slower than Slug to ~5× faster);
   ≥ 8px em bit-identical for full-x-height glyphs, but small-ink punctuation is approximated higher (Lato `.` to
   ~29.5px em, `,` ~14.6px, `-` ~15.0px) since the gate is the ink box, not the em.
-- **AA pad 2px → 1px** (both vertex shaders — coverage only reaches half a pixel past the ink). The pad ring
-  dominates small instances' fragment count: ~20–35% faster below 16px for _both_ algorithms, no visual change.
+- **0.625px kernel skirt**: windfoil uses 0.5px box support plus 0.125px derivative slack per axis; Slug mirrors
+  it for fair benchmark bounds, and `KERNEL_SUPPORT_PX` is the per-axis hook for wider kernels.
 - **Footprint via `fwidth`** instead of per-axis `length()`: −2 sqrt per fragment, bit-identical under the
   axis-aligned camera, and the same measure the reference Slug uses.
 - **`BAND_SORT_MIN` 8 → 4**: the sorted early-break pays for itself on nearly any band (tiger −4–5%).
