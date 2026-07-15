@@ -117,19 +117,9 @@ or self-intersecting contours), and even-odd across non-adjacent levels all brea
 saturating-area approximation. This is the per-pixel limit of signed-area _accumulation_ rasterizers (font-rs,
 Vello), which clamp the same averaged winding; a full coverage rasterizer like Skia resolves these clean cases
 exactly and only deviates alongside us at sharp self-intersection slivers (§8). So the integral is exact for the
-averaged winding number; the fold is exact only under the usual local-winding assumptions.
-
-For offline/static renders where per-pixel cost is no concern, an opt-in **exact mode** skips the fold
-entirely: setting the shader's `EXACT_MODE` override (through the pipeline `constants` map, like the
-minification guard) samples the true fill rule on an `EXACT_GRID`×`EXACT_GRID` grid inside the pixel
-footprint — reusing the same banded curve gather — and averages, so it is correct on every case above.
-Because it is a pipeline-overridable constant the exact path is compiled out of the interactive pipeline
-entirely (benchmarked at run-to-run noise), unlike a uniform branch. The trade is `EXACT_GRID`² winding
-evaluations per pixel, and ordinary anti-aliased edges pick up the grid's sub-sample quantisation (→ 0 as
-the grid grows). `deno task validate --exact` (or `?exact` on the browser page) runs the suite in this
-mode: every fold case drops to ≤ 0.002 — including the minified fence, which no finite amount of
-fold-averaging fixes — while the common-shape mean rises from 0.00012 to 0.00044 (the 8×8 quantisation).
-
+averaged winding number; the fold is exact only under the usual local-winding assumptions. (The `EXACT_MODE`
+shader override sidesteps the fold for offline renders by point-sampling the true fill rule per pixel;
+`deno task validate --exact`.)
 
 ---
 
