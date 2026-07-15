@@ -27,8 +27,10 @@ const ROW_XMAX : u32 = 4u;
 
 // Below GUARD_PX device pixels (whole glyph, both axes — illegible sizes) coverage comes from the banded ink
 // profile (profile_face) instead of the exact gather. Threshold rationale + the quality/perf trade of raising
-// it: bench/README.md, bench/ACCEL-NOTES.md.
-const MINIFICATION_GUARD = true;
+// it: bench/README.md, bench/ACCEL-NOTES.md. Pipeline-overridable (specialized at pipeline creation, so the
+// disabled branch still compiles out): the validation suite's exact mode sets it to false via the pipeline
+// `constants` map so the ink-profile approximation never stands in for the integral it is measuring.
+override MINIFICATION_GUARD : bool = true;
 const GUARD_PX = 3.7;
 
 // Kernel support plus 0.125px derivative slack; adjust support per axis for other kernels.

@@ -45,8 +45,10 @@ function storage(device, floats) {
  * @param {Uint32Array} o.rows       row bands ([start, count, density, xMin, xMax] per band; see bands.js)
  * @param {Float32Array} o.instances packed instance data (16 floats each)
  * @param {number} o.instanceCount
+ * @param {Object<string, number>} [o.constants] pipeline-overridable WGSL constants for the fragment stage
+ *   (e.g. { MINIFICATION_GUARD: 0 }); omitted constants keep their shader defaults
  */
-export function createGlyphRenderer(device, { code, format, curves, rows, instances, instanceCount }) {
+export function createGlyphRenderer(device, { code, format, curves, rows, instances, instanceCount, constants }) {
   const module = device.createShaderModule({ code });
 
   // Uniforms: res (vec2) + style (gamma, sharp) + camera (scaleX, scaleY, transX, transY) = 8 floats.
@@ -61,6 +63,7 @@ export function createGlyphRenderer(device, { code, format, curves, rows, instan
     fragment: {
       module,
       entryPoint: 'fs',
+      constants,
       targets: [
         {
           format,
@@ -116,12 +119,19 @@ export function createGlyphRenderer(device, { code, format, curves, rows, instan
  * @param {Float32Array} o.curves    @param {Uint32Array} o.rows    @param {Float32Array} o.instances
  * @param {number} o.instanceCount
  * @param {[number, number]} [o.style] coverage-style (gamma, sharp); [1, 1] = exact (identity)
+ * @param {GPUDevice} [o.device] reuse an existing device (one is requested per call otherwise — pass this
+ *   when rendering many scenes, e.g. the validation suite)
+ * @param {Object<string, number>} [o.constants] pipeline-overridable WGSL constants (see createGlyphRenderer)
+ * @param {string} [o.code] alternate WGSL source sharing the same pipeline layout (e.g. the benchmark's Slug
+ *   shader); defaults to the windfoil shader
  * @returns {Promise<Uint8Array>} width*height*4 RGBA8, straight alpha
  */
-export async function renderToRGBA({ width, height, background, curves, rows, instances, instanceCount, style = [1, 1] }) {
-  const device = await requestDevice();
+export async function renderToRGBA(
+  { width, height, background, curves, rows, instances, instanceCount, style = [1, 1], device, constants, code },
+) {
+  device ??= await requestDevice();
   const format = 'rgba8unorm';
-  const code = await loadShaderCode();
+  code ??= await loadShaderCode();
 
   const target = device.createTexture({
     size: [width, height],
@@ -129,7 +139,7 @@ export async function renderToRGBA({ width, height, background, curves, rows, in
     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
   });
 
-  const renderer = createGlyphRenderer(device, { code, format, curves, rows, instances, instanceCount });
+  const renderer = createGlyphRenderer(device, { code, format, curves, rows, instances, instanceCount, constants });
   renderer.setUniforms({ width, height, style }); // identity camera → device px === layout px
 
   const [br, bg, bb, ba = 1] = background;
@@ -164,5 +174,8 @@ export async function renderToRGBA({ width, height, background, curves, rows, in
     rgba.set(padded.subarray(y * bytesPerRow, y * bytesPerRow + width * 4), y * width * 4);
   }
   readback.unmap();
+  // Free the per-call GPU resources — the device may be shared across many renders.
+  target.destroy();
+  readback.destroy();
   return rgba;
 }

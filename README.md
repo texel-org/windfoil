@@ -20,10 +20,12 @@ Requires [Deno](https://deno.com/) 2.x on a machine with a WebGPU-capable GPU.
 # renders a PNG in output/
 deno task render
 
-# compare against point-sampled box filter and Skia
+# compare against point-sampled box filter, Skia, and Slug (synthetic shapes + glyphs a–z)
 deno task validate
 
 # serve the demo, then open http://localhost:8080/
+# (or http://localhost:8080/tools/validate/ to run the validation suite against
+#  the browser's own canvas2d rasterizer)
 deno task serve
 ```
 

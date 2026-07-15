@@ -11,10 +11,13 @@ export function parseFont(buffer) {
   return opentype.parse(buffer);
 }
 
-// Deno convenience: read a .ttf off disk and parse it.
+// Read a .ttf in either environment (Deno reads it off disk, the browser fetches it) and parse it.
 export async function loadFont(url) {
-  const bytes = await Deno.readFile(url);
-  return parseFont(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  if (typeof Deno !== 'undefined') {
+    const bytes = await Deno.readFile(url);
+    return parseFont(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  }
+  return parseFont(await fetch(url).then((r) => r.arrayBuffer()));
 }
 
 // A cubic → two quadratics (only reached if the font carries cubic outlines; TrueType does not).

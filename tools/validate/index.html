@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>windfoil — validate</title>
+    <link rel="icon" href="data:," />
+
+    <style>
+      :root {
+        color-scheme: light;
+        /* Same modern monospace stack as the demo. */
+        --mono:
+          ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono",
+          "Fira Code", "Cascadia Code", "Roboto Mono", Menlo, Consolas,
+          monospace;
+      }
+      body {
+        margin: 20px;
+        background: #e9e3d5;
+        color: #000;
+        font: 13px var(--mono);
+      }
+      h1 {
+        font-size: 13px;
+        font-weight: 700;
+        margin: 0 0 6px;
+      }
+      #params { margin-bottom: 4px; }
+      #status { margin-bottom: 16px; }
+      /* The stats table mirrors the Deno console table: shape · ours-vs-box · canvas-vs-box (mean, max). */
+      table {
+        border-collapse: collapse;
+        background: #fff;
+      }
+      th, td {
+        padding: 3px 10px;
+        border: 1px solid rgba(0, 0, 0, 0.15);
+        text-align: right;
+        font-weight: 400;
+      }
+      th { font-weight: 700; }
+      th:first-child, td:first-child { text-align: left; }
+      /* † rows: the winding-fold limit cases — 'ours vs box' deviation there is documented, not a bug. */
+      tr.fold td { color: rgba(0, 0, 0, 0.55); }
+      /* One panel per shape: the three coverage views + the three amplified error maps. */
+      .panel { margin-top: 20px; }
+      .panel h2 {
+        font-size: 13px;
+        font-weight: 700;
+        margin: 0 0 2px;
+      }
+      .panel-stats { margin-bottom: 6px; }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      figure { margin: 0; }
+      figure canvas {
+        display: block;
+        width: 128px;
+        height: 128px;
+        background: #000;
+        image-rendering: pixelated; /* stays crisp under browser zoom — zoom in to inspect pixels */
+      }
+      figcaption {
+        font-size: 11px;
+        padding-top: 2px;
+      }
+    </style>
+    <!-- No bundler: the shared src/*.js modules import opentype.js by its bare name; map it to an ESM build
+         so the browser resolves the same specifier Deno does (same map as the root demo page). -->
+    <script type="importmap">
+      {
+        "imports": {
+          "opentype.js": "https://esm.sh/opentype.js@1.3.5"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <h1>windfoil — validation suite</h1>
+    <div id="params">…</div>
+    <div id="status">booting…</div>
+
+    <table id="stats">
+      <thead>
+        <tr>
+          <th rowspan="2">shape</th>
+          <th colspan="2">ours vs box</th>
+          <th colspan="2">canvas vs box</th>
+          <th colspan="2">slug vs box</th>
+        </tr>
+        <tr>
+          <th>mean</th>
+          <th>max</th>
+          <th>mean</th>
+          <th>max</th>
+          <th>mean</th>
+          <th>max</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <div id="panels"></div>
+
+    <script type="module" src="./browser.js"></script>
+  </body>
+</html>

@@ -123,20 +123,31 @@ averaged winding number; the fold is exact only under the usual local-winding as
 
 ## 5. Numerical validation
 
-`deno task validate` compares the shader's coverage against two independent references: **box**, a box filter
+`deno task validate` compares the shader's coverage against independent references: **box**, a box filter
 from a zero-AA point sample (fraction of a 24×24 sub-sample grid inside the shape, decided by ray-casting the
-raw curves — a different code path from the area integral), and **skia**
-([@napi-rs/canvas](https://www.npmjs.com/package/@napi-rs/canvas)). Mean / worst-pixel `|Δcoverage|` on this
-machine:
+raw curves — a different code path from the area integral), **skia**
+([@napi-rs/canvas](https://www.npmjs.com/package/@napi-rs/canvas)), and **slug** (the benchmark's verified
+Slug port, [`../bench/slug.wgsl`](../bench/slug.wgsl) — the other analytic AA model, and like ours a scalar
+per-pixel estimate, so it shares the winding-fold deviations that Skia's coverage rasterizer resolves). The
+suite is the synthetic stress shapes,
+the winding-fold failure cases from `tools/failure.js` (marked `†` and reported separately — deviation there
+is the documented §4/§8 limit, not error), plus every lowercase letter a–z of the bundled font. Mean /
+worst-pixel `|Δcoverage|` on this machine (representative rows):
 
 ```
 shape                     ours vs box        skia vs box
                           mean      max      mean      max
 rotated square 30°        0.00003   0.004    0.00079   0.092
 circle r=44 (64 arcs)     0.00003   0.006    0.00073   0.177
-glyph 'o' (with hole)     0.00006   0.014    0.00231   0.340
+glyph 'o'                 0.00006   0.014    0.00231   0.340
 star {5/2} even-odd       0.00017   0.100    0.00111   0.090
 ```
+
+The same harness ([`../tools/validate/harness.js`](../tools/validate/harness.js)) also runs in a browser
+against the browser's _own_ canvas2d rasterizer (Skia in Chrome, CoreGraphics in Safari, WebRender in
+Firefox): `deno task serve`, then open <http://localhost:8080/tools/validate/>. Only the boots differ — Deno
+supplies @napi-rs/canvas and writes PNGs; the browser supplies its canvas and streams the panels into the
+page.
 
 **On the deltas and exactness.** The non-zero numbers above are the reference and the readback, not the
 algorithm's error: `box` is a 24×24 point sample (its own ~1/F noise means no exact method scores 0 against it),
