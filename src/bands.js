@@ -123,20 +123,31 @@ export function bandPieces(pieces, y0, y1, curveOut, rowOut, targetPerBand = TAR
   const headerBandH = R > 1 ? Math.fround(1 / Math.fround(invH)) : Math.fround(bandH);
   const xMax = (k) => Math.max(pieces[k * 6], pieces[k * 6 + 2], pieces[k * 6 + 4]);
   const xMin = (k) => Math.min(pieces[k * 6], pieces[k * 6 + 2], pieces[k * 6 + 4]);
+  const hasYSpan = (k) => {
+    const p = k * 6;
+    const y = Math.fround(pieces[p + 1]);
+    return y !== Math.fround(pieces[p + 3]) || y !== Math.fround(pieces[p + 5]);
+  };
   for (let b = 0; b < R; b++) {
     const bucket = buckets[b];
     if (bucket.length > BAND_SORT_MIN) bucket.sort((a, c) => xMax(c) - xMax(a));
+    // A piece whose three y values collapse to one f32 is horizontal after upload, so it contributes no
+    // winding area or point-ray crossing. Keep it in `bucket` for the minification profile's original
+    // density/hull, but omit it from the exact gather.
+    const gather = bucket.filter(hasYSpan);
     const start = curveOut.length / 6;
     let bxMin = 3e38, bxMax = -3e38; // empty band ⇒ inverted far sentinels — the skip tests see "no ink"
     //                                  (finite, since WGSL implementations may assume floats are finite)
-    for (const k of bucket) {
+    for (const k of gather) {
       for (let j = 0; j < 6; j++) curveOut.push(pieces[k * 6 + j]);
+    }
+    for (const k of bucket) {
       bxMin = Math.min(bxMin, xMin(k));
       bxMax = Math.max(bxMax, xMax(k));
     }
     const area = n ? bandWindingArea(pieces, bucket, xLeft, y0 + b * bandH, y0 + (b + 1) * bandH) : 0;
     const density = area / Math.max(headerBandH * (bxMax - bxMin), 1e-30);
-    rowOut.push(start, bucket.length, f32bits(density), f32bits(bxMin), f32bits(bxMax));
+    rowOut.push(start, gather.length, f32bits(density), f32bits(bxMin), f32bits(bxMax));
   }
   return { rowBase, bandCount: R, bandH: headerBandH, invH };
 }
