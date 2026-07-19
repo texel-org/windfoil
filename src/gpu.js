@@ -17,7 +17,9 @@ export async function loadShaderCode(url = WGSL_URL) {
 // Request a WebGPU device (throws with a helpful message if there's no adapter).
 export async function requestDevice() {
   const adapter = await navigator.gpu?.requestAdapter();
-  if (!adapter) throw new Error('No WebGPU adapter — needs a GPU-capable host (Deno: run with --unstable-webgpu).');
+  if (!adapter) {
+    throw new Error('No WebGPU adapter — needs a GPU-capable host (Deno: run with --unstable-webgpu).');
+  }
   const device = await adapter.requestDevice();
   device.addEventListener?.('uncapturederror', (e) => console.error('WebGPU error:', e.error?.message));
   return device;
@@ -47,8 +49,14 @@ function storage(device, floats) {
  * @param {number} o.instanceCount
  * @param {Object<string, number>} [o.constants] pipeline-overridable WGSL constants for the fragment stage
  *   (e.g. { MINIFICATION_GUARD: 0 }); omitted constants keep their shader defaults
+ * @param {boolean} [o.blend] premultiplied-alpha "over" blending (default). Pass false to write fragment
+ *   output directly — required for float32 targets (blending them needs the float32-blendable feature), and
+ *   equivalent for a single draw over a cleared black background, where "over" reduces to src anyway.
  */
-export function createGlyphRenderer(device, { code, format, curves, rows, instances, instanceCount, constants }) {
+export function createGlyphRenderer(
+  device,
+  { code, format, curves, rows, instances, instanceCount, constants, blend = true },
+) {
   const module = device.createShaderModule({ code });
 
   // Uniforms: res (vec2) + style (gamma, sharp) + camera (scaleX, scaleY, transX, transY) = 8 floats.
@@ -68,10 +76,14 @@ export function createGlyphRenderer(device, { code, format, curves, rows, instan
         {
           format,
           // premultiplied-alpha "over": out = src + dst·(1 − src.a)
-          blend: {
-            color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-          },
+          ...(blend
+            ? {
+              blend: {
+                color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+              },
+            }
+            : {}),
         },
       ],
     },
@@ -126,11 +138,45 @@ export function createGlyphRenderer(device, { code, format, curves, rows, instan
  *   shader); defaults to the windfoil shader
  * @returns {Promise<Uint8Array>} width*height*4 RGBA8, straight alpha
  */
-export async function renderToRGBA(
-  { width, height, background, curves, rows, instances, instanceCount, style = [1, 1], device, constants, code },
+export function renderToRGBA(opts) {
+  return renderOffscreen(opts, 'rgba8unorm', true);
+}
+
+/**
+ * One-shot offscreen render → f32 coverage readback (the validation path). Same options as `renderToRGBA`,
+ * but the target is `r32float` with blending off, so the shader's premultiplied red channel — coverage, for a
+ * white fill — comes back as the exact f32 the fragment stage produced, with no 8-bit (1/255) quantization.
+ * Blending off is safe here because validation draws a single instance over a cleared black background, where
+ * premultiplied "over" reduces to src; it also keeps the float target core WebGPU (blending float32 formats
+ * would need the float32-blendable feature).
+ *
+ * @returns {Promise<Float32Array>} width*height coverage values
+ */
+export async function renderToCoverage(opts) {
+  const bytes = await renderOffscreen(opts, 'r32float', false);
+  return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.length / 4);
+}
+
+// The shared body: render the scene with an identity camera into a texture of the given format (both formats
+// used here are 4 bytes/pixel), then copy it back and de-pad. Callers reinterpret the bytes.
+async function renderOffscreen(
+  {
+    width,
+    height,
+    background,
+    curves,
+    rows,
+    instances,
+    instanceCount,
+    style = [1, 1],
+    device,
+    constants,
+    code,
+  },
+  format,
+  blend,
 ) {
   device ??= await requestDevice();
-  const format = 'rgba8unorm';
   code ??= await loadShaderCode();
 
   const target = device.createTexture({
@@ -139,7 +185,16 @@ export async function renderToRGBA(
     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
   });
 
-  const renderer = createGlyphRenderer(device, { code, format, curves, rows, instances, instanceCount, constants });
+  const renderer = createGlyphRenderer(device, {
+    code,
+    format,
+    curves,
+    rows,
+    instances,
+    instanceCount,
+    constants,
+    blend,
+  });
   renderer.setUniforms({ width, height, style }); // identity camera → device px === layout px
 
   const [br, bg, bb, ba = 1] = background;

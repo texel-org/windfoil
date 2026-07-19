@@ -28,7 +28,9 @@
       }
       #params { margin-bottom: 4px; }
       #status { margin-bottom: 16px; }
-      /* The stats table mirrors the Deno console table: shape · ours-vs-box · canvas-vs-box (mean, max). */
+      /* The stats table mirrors the Deno console table: per renderer vs the box-filter oracle — cell-wide
+         mean, then mean / p99 / max restricted to the edge pixels the shape touches — plus the oracle's own
+         residual (ref≤). */
       table {
         border-collapse: collapse;
         background: #fff;
@@ -88,16 +90,23 @@
       <thead>
         <tr>
           <th rowspan="2">shape</th>
-          <th colspan="2">ours vs box</th>
-          <th colspan="2">canvas vs box</th>
-          <th colspan="2">slug vs box</th>
+          <th colspan="4">ours vs oracle</th>
+          <th colspan="4">canvas vs oracle</th>
+          <th colspan="4">slug vs oracle</th>
+          <th rowspan="2">ref≤</th>
         </tr>
         <tr>
           <th>mean</th>
+          <th>edgeμ</th>
+          <th>p99</th>
           <th>max</th>
           <th>mean</th>
+          <th>edgeμ</th>
+          <th>p99</th>
           <th>max</th>
           <th>mean</th>
+          <th>edgeμ</th>
+          <th>p99</th>
           <th>max</th>
         </tr>
       </thead>

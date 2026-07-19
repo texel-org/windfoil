@@ -49,11 +49,11 @@ At height $y$ the curve sits at $x_e$, so the horizontal extent it covers inside
 $\text{clamp}(x_e, x_{lo}, x_{hi}) - x_{lo}$; the $y_e'\, dt$ factor sweeps that extent up the curve with the correct sign. The
 single clamp collapses the cases:
 
-| curve position relative to box | $\text{clamp}(x_e, x_{lo}, x_{hi}) - x_{lo}$ | contribution                           |
-| ------------------------------ | ---------------------------- | -------------------------------------- |
-| fully **left** ($x_e \leq x_{lo}$)   | $0$                          | nothing                                |
-| fully **right** ($x_e \geq x_{hi}$)  | $x_{hi} - x_{lo} = s_x$             | full box width $\times \Delta y$ — interior winding |
-| **crossing** the box           | partial                      | boundary area — the anti-aliasing      |
+| curve position relative to box      | $\text{clamp}(x_e, x_{lo}, x_{hi}) - x_{lo}$ | contribution                                        |
+| ----------------------------------- | -------------------------------------------- | --------------------------------------------------- |
+| fully **left** ($x_e \leq x_{lo}$)  | $0$                                          | nothing                                             |
+| fully **right** ($x_e \geq x_{hi}$) | $x_{hi} - x_{lo} = s_x$                      | full box width $\times \Delta y$ — interior winding |
+| **crossing** the box                | partial                                      | boundary area — the anti-aliasing                   |
 
 Interior winding and edge anti-aliasing come from one term, with no separate inside/outside test or edge ramp;
 grazing rays and near-degenerate controls go through the same integral. (The implementation still relies on
@@ -82,8 +82,8 @@ saturated by the endpoints (`mono_root` in the shader — one `sqrt`, no branch-
 $x = x_{lo}$ and $x = x_{hi}$ into three zones in a statically known order (set by the x direction):
 
 ```
-   x rising →   t_lo ── LEFT ──┤ t_left ── INSIDE ──┤ t_right ── RIGHT ── t_hi
-   (mirrored when the piece runs the other way)
+x rising →   t_lo ── LEFT ──┤ t_left ── INSIDE ──┤ t_right ── RIGHT ── t_hi
+(mirrored when the piece runs the other way)
 ```
 
 - **LEFT** ($x < x_{lo}$): contributes $0$.
@@ -125,25 +125,94 @@ shader override sidesteps the fold for offline renders by point-sampling the tru
 
 ## 5. Numerical validation
 
-`deno task validate` compares the shader's coverage against independent references: **box**, a box filter
-from a zero-AA point sample (fraction of a 24×24 sub-sample grid inside the shape, decided by ray-casting the
-raw curves — a different code path from the area integral), **skia**
-([@napi-rs/canvas](https://www.npmjs.com/package/@napi-rs/canvas)), and **slug** (the benchmark's verified
-Slug port, [`../bench/slug.wgsl`](../bench/slug.wgsl) — the other analytic AA model, and like ours a scalar
-per-pixel estimate, so it shares the winding-fold deviations that Skia's coverage rasterizer resolves). The
-suite is the synthetic stress shapes,
-the winding-fold failure cases from `tools/failure.js` (marked `†` and reported separately — deviation there
-is the documented §4/§8 limit, not error), plus every lowercase letter a–z of the bundled font. Mean /
-worst-pixel `|Δcoverage|` on this machine (representative rows):
+`deno task validate` measures every renderer against a **box-filter oracle** — the quantity §1 defines as the
+target, computed to high precision by a code path independent of the shader's area integral:
+
+- **oracle** — per pixel, $\int\int \text{fill}\,dx\,dy$ is computed _exactly along x_ (covered lengths by
+  interval arithmetic over ray-cast crossings of the raw curves — no AA model), leaving one numeric 1-D
+  integral over y: adaptive 8-point Gauss–Legendre between the analytic breakpoints (heights where a curve
+  starts, ends or turns around, or where a crossing slides over a pixel boundary), all in f64. Each shape
+  reports the oracle's own convergence residual (the `ref≤` column — ≤ 2.4×10⁻¹⁰ across the suite), and
+  `deno task validate --selftest` checks the oracle against two constructions that share none of its code:
+  exact interval products on the axis-aligned bars (agreement 5×10⁻¹⁵) and Sutherland–Hodgman clip areas on
+  the rotated square (1×10⁻¹²). The reference's noise is measured, not assumed away.
+- **ours** and **slug** (the benchmark's verified Slug port, [`../bench/slug.wgsl`](../bench/slug.wgsl))
+  render to an `r32float` target and read back the fragment stage's f32 coverage directly — no 8-bit
+  quantization floor in the comparison.
+- **skia** ([@napi-rs/canvas](https://www.npmjs.com/package/@napi-rs/canvas)) is read through its 8-bit API,
+  which adds a ~10⁻³ floor of its own — negligible against its actual distance from this target.
+
+The suite is the synthetic stress shapes, the winding-fold failure cases from `tools/failure.js` (marked `†`
+and reported separately — deviation there is the documented §4/§8 limit, not error), plus every lowercase
+letter a–z of the bundled font. Because interior and exterior pixels agree trivially and pad any cell-wide
+mean toward zero, statistics are reported both cell-wide (`mean`, `max`) and **restricted to edge pixels**
+(`edgeμ`, `p99`) — the pixels within one pixel of any curve, a geometric mask independent of every renderer;
+aggregates pool all edge pixels of the set and add quantiles. `|Δcoverage|` vs the oracle on this machine
+(representative rows):
 
 ```
-shape                    ours vs box       skia vs box       slug vs box
-                         mean      max     mean      max     mean      max
-rotated square 30°       0.00003   0.004   0.00079   0.092   0.00069   0.073
-circle r=44 (64 arcs)    0.00003   0.006   0.00073   0.177   0.00036   0.060
-glyph 'o'                0.00006   0.014   0.00231   0.340   0.00079   0.090
-star {5/2} even-odd      0.00017   0.100   0.00111   0.090   0.00094   0.093
-common shapes (37)       0.00012   0.100   0.00163   0.360   0.00106   0.324
+                                          ours vs oracle                        skia vs oracle                        slug vs oracle
+shape                    mean    edgeμ      p99      max       mean    edgeμ      p99      max       mean    edgeμ      p99      max       ref≤
+rotated square 30°     1.4e-5   2.1e-4   9.5e-4   9.5e-4     7.9e-4   1.1e-2   7.8e-2   9.2e-2     6.9e-4   9.9e-3   6.6e-2   7.2e-2    1.8e-14
+circle r=44            1.6e-8   2.5e-7   2.9e-6   3.9e-6     7.3e-4   1.2e-2   1.2e-1   1.8e-1     3.5e-4   5.7e-3   4.4e-2   5.9e-2    3.8e-11
+glyph 'o'              1.9e-6   1.6e-5   1.3e-4   1.3e-4     2.3e-3   2.0e-2   1.9e-1   3.4e-1     7.8e-4   6.8e-3   7.4e-2   9.0e-2    1.2e-10
+star {5/2} even-odd    4.1e-5   3.9e-4   1.6e-3   9.3e-2     1.0e-3   9.8e-3   6.9e-2   8.9e-2     8.5e-4   8.1e-3   7.3e-2   8.9e-2    5.7e-11
+
+common shapes (37, no † rows):
+  ours: cell mean 1.0e-5 · edge (74515 px) mean 8.2e-5 p50 8.9e-8 p90 1.9e-4 p99 1.2e-3 max 9.3e-2
+  skia: cell mean 1.6e-3 · edge (74515 px) mean 1.3e-2 p50 0 p90 4.9e-2 p99 1.4e-1 max 3.6e-1
+  slug: cell mean 9.9e-4 · edge (74515 px) mean 8.1e-3 p50 0 p90 3.1e-2 p99 1.1e-1 max 3.3e-1
+```
+
+(Skia's p50 of 0 is its 8-bit API emitting exact 0/1 on the mask's fully-inside/outside pixels, where an f32
+readback leaves ~10⁻⁷ dust.)
+
+**What the numbers do and don't say.** The oracle is the box filter _windfoil selects as its target_ (§1,
+§8). "ours vs oracle" therefore measures whether the algorithm achieves what it claims to compute — and on
+common shapes it does, to measurement precision. "skia vs oracle" is the distance between Skia's
+anti-aliasing — its own, deliberate reconstruction model (flattened curves, its own edge response) — and
+_windfoil's_ target: a statement about differing targets, **not a general fidelity ranking**. On the † fold
+cases the roles even reverse: Skia's coverage rasterizer resolves the conflict pixels our winding fold cannot
+(§4). Slug approximates the same box filter ours computes, as a scalar per-pixel estimate like ours — so it
+shares the † fold-family deviations almost exactly, and its point-sampled dual rays bead on sub-pixel strokes
+(the 0.75px spoke wheel is its worst common row).
+
+**The ours-vs-oracle residual, decomposed.** On common shapes it has two parts. (1) The GPU rasterizer
+quantizes the instance quad's vertex positions to a sub-pixel grid, which shears the interpolated
+pixel-center by up to ~2⁻⁹ px and shifts each edge's coverage by up to ~10⁻³ · |∇coverage| — an artifact of
+drawing _any_ analytic AA through a vertex quad, not of the integral: it is bit-identical in slug, and absent
+on shapes whose bbox lands on integers (circle 2.5×10⁻⁷, spokes 6.6×10⁻⁷ edge means). (2) Beneath it, the
+integral's own f32 arithmetic floor, ~10⁻⁶. The only _algorithmic_ deviation is the winding fold (§4), which
+the star maxes measure (~0.1 at sub-pixel self-intersection slivers, where Skia deviates comparably).
+(`deno task validate --exact` corroborates both sides: with the `EXACT_MODE` override, every † fold row
+agrees with the oracle to ~10⁻¹⁵ — the shader's true-fill sampling and the oracle concur on precisely the
+cases the fold cannot represent — while ordinary edges pick up the override's 8×8 sample-grid quantization,
+as documented.)
+
+**Reference-refinement study** (`deno task validate --convergence`). The suite's previous reference was an
+F×F zero-AA point sample at F=24 — per-pixel coverage quantum 1/F² ≈ 1.7×10⁻³, a floor that swamped errors
+near 10⁻⁴. Refining F shows that reference converging to the oracle at ~O(1/F²) while ours holds one level,
+already below the finest 96×96 sample on curved shapes; the `ours (int bbox)` row re-renders with the
+instance bbox snapped to integers, removing component (1) of the residual:
+
+```
+rotated square 30°   (oracle residual ≤ 1.8e-14, 1148 edge px)
+  source            quantum    edgeμ      p99      max
+  box 6×6            2.8e-2   2.6e-3   1.9e-2   2.0e-2
+  box 12×12          6.9e-3   7.5e-4   5.0e-3   6.3e-3
+  box 24×24          1.7e-3   2.0e-4   1.4e-3   1.7e-3
+  box 48×48          4.3e-4   5.8e-5   4.2e-4   4.9e-4
+  box 96×96          1.1e-4   1.5e-5   1.0e-4   1.2e-4
+  ours                    —   2.1e-4   9.5e-4   9.5e-4
+  ours (int bbox)         —   8.1e-7   4.9e-6   6.5e-6
+
+glyph 'o'   (oracle residual ≤ 1.2e-10, 1882 edge px)
+  source            quantum    edgeμ      p99      max
+  box 6×6            2.8e-2   4.3e-3   4.7e-2   7.4e-2
+  box 24×24          1.7e-3   4.4e-4   5.7e-3   1.5e-2
+  box 96×96          1.1e-4   4.3e-5   5.2e-4   1.5e-3
+  ours                    —   1.6e-5   1.3e-4   1.3e-4
+  ours (int bbox)         —   3.4e-7   2.7e-6   4.7e-6
 ```
 
 The same harness ([`../tools/validate/harness.js`](../tools/validate/harness.js)) also runs in a browser
@@ -151,22 +220,6 @@ against the browser's _own_ canvas2d rasterizer (Skia in Chrome, CoreGraphics in
 Firefox): `deno task serve`, then open <http://localhost:8080/tools/validate/>. Only the boots differ — Deno
 supplies @napi-rs/canvas and writes PNGs; the browser supplies its canvas and streams the panels into the
 page.
-
-**On the deltas and exactness.** The non-zero numbers above are the reference and the readback, not the
-algorithm's error: `box` is a 24×24 point sample (its own ~1/F noise means no exact method scores 0 against it),
-and renders are compared at 8-bit. Against an _exact_ analytic box filter instead, the rotated square agrees to a
-mean of 2.5×10⁻⁵ and never more than one code value per pixel — the shader reproduces the box filter exactly, up
-to 8-bit and f32 rounding. The one real deviation is the winding fold (§4), which the `star {5/2}` maxes measure.
-
-On ordinary fills the shader matches the point-sampled box filter to within its own sampling noise
-(max ≲ 0.02). Skia sits further off because it flattens curves to line segments (its circle deviation shrinks
-as arc count rises; the test uses 64 arcs) and its edge AA is its own model. Slug lands between the two
-(common-shape mean 0.00106): like ours it is exact on axis-aligned edges and handles curvature analytically,
-but its point-sampled dual rays bead on sub-pixel strokes (the 0.75px spoke wheel is its worst common row),
-and it reproduces the † fold deviations almost exactly alongside ours — those limits belong to scalar
-per-pixel coverage estimation as a class, which Skia's full coverage rasterizer resolves. The
-self-intersecting star is the documented §4 limit: the winding fold deviates by ~0.1 at the crossings,
-comparable to Skia there.
 
 ---
 
@@ -204,18 +257,18 @@ wobbling by ~`ULP(coordinate)·zoom` from the `curve − rc` evaluation (see §8
 
 ## 7. Map to the code
 
-| concept                                                                   | where                                                                       |
-| ------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| split curves into xy-monotone pieces                                      | [`src/geometry.js`](../src/geometry.js)                                     |
-| file pieces into row bands, build the deduped atlas (§6)                  | [`src/bands.js`](../src/bands.js)                                           |
-| `mono_root` — single-branch monotone quadratic solve                      | [`src/windfoil.wgsl`](../src/windfoil.wgsl)                                 |
-| `integrate_inside` — exact midpoint rule for the INSIDE zone              | `src/windfoil.wgsl`                                                         |
-| `integrate_piece` — the LEFT / INSIDE / RIGHT zone split                  | `src/windfoil.wgsl`                                                         |
-| `integrate_band` — sum `A_e` over one band's pieces, with the early break | `src/windfoil.wgsl`                                                         |
-| `integrate_face` — select + read the row bands a pixel touches (§6)       | `src/windfoil.wgsl`                                                         |
+| concept                                                                    | where                                                                |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| split curves into xy-monotone pieces                                       | [`src/geometry.js`](../src/geometry.js)                              |
+| file pieces into row bands, build the deduped atlas (§6)                   | [`src/bands.js`](../src/bands.js)                                    |
+| `mono_root` — single-branch monotone quadratic solve                       | [`src/windfoil.wgsl`](../src/windfoil.wgsl)                          |
+| `integrate_inside` — exact midpoint rule for the INSIDE zone               | `src/windfoil.wgsl`                                                  |
+| `integrate_piece` — the LEFT / INSIDE / RIGHT zone split                   | `src/windfoil.wgsl`                                                  |
+| `integrate_band` — sum `A_e` over one band's pieces, with the early break  | `src/windfoil.wgsl`                                                  |
+| `integrate_face` — select + read the row bands a pixel touches (§6)        | `src/windfoil.wgsl`                                                  |
 | `profile_face` — the guard's banded ink profile, instances ≤ a few px (§8) | `src/windfoil.wgsl` (`MINIFICATION_GUARD`), `src/bands.js` (density) |
-| `fs` / `fold_shade` — normalize `F`, fold (nonzero / even-odd), style     | `src/windfoil.wgsl`                                                         |
-| instanced quad + per-glyph band table                                     | `src/windfoil.wgsl` (`vs`), [`src/layout.js`](../src/layout.js)             |
+| `fs` / `fold_shade` — normalize `F`, fold (nonzero / even-odd), style      | `src/windfoil.wgsl`                                                  |
+| instanced quad + per-glyph band table                                      | `src/windfoil.wgsl` (`vs`), [`src/layout.js`](../src/layout.js)      |
 
 ---
 
