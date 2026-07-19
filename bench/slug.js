@@ -12,7 +12,7 @@
 // so all indices stay global), which means the Slug scene reuses windfoil's 4-binding pipeline
 // (`createGlyphRenderer`) unchanged — only the instance stride (20 floats) and the shader differ.
 
-import { bandPieces } from '../src/bands.js';
+import { bandPieces } from './bands-legacy.js';
 import { glyphQuads } from '../src/font.js';
 import { loadShaderCode } from '../src/gpu.js';
 

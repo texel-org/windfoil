@@ -57,10 +57,12 @@ so the robust submit→done wall time is used instead.)
 
 The benchmark reuses the repo's building blocks rather than duplicating them:
 
-- **Banding** — `bandPieces` from `src/bands.js` files curves into row bands for _both_ algorithms. Windfoil's
-  horizontal bands are its monotone pieces; Slug's are whole quads, filed twice: once by y (horizontal ray) and
-  once as 90°-rotated `(y, −x)` quads (vertical ray), so the same filer produces both band sets and the same
-  in-shader gather serves both rays.
+- **Banding** — both algorithms use the same row-band filing idea, but windfoil's atlas format has since
+  evolved (band-clipped pieces, F/E segments, packed cull metadata — see "Applied optimizations"), so Slug
+  keeps a FROZEN copy of the original filer (`bench/bands-legacy.js`): whole quads in the original
+  `[start, count, density, xMin, xMax]` stride-5 layout, filed twice — once by y (horizontal ray) and once as
+  90°-rotated `(y, −x)` quads (vertical ray). Freezing it keeps the Slug side bit-identical across windfoil's
+  atlas changes.
 - **Pipeline** — `createGlyphRenderer` from `src/gpu.js` is reused verbatim. Slug packs its two band sets into
   one curve buffer + one row table, so it stays a 4-binding pipeline; only the instance stride (20 floats vs 16)
   and the shader differ.
@@ -132,9 +134,9 @@ so `tiger.js` now appends the closing edge on load, feeding both algorithms iden
 | regime            | glyph px | result                                                                                                                                                                               |
 | ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | illegible         | ≤ ~4px   | **windfoil ~5–6× faster** — the `MINIFICATION_GUARD` renders whole tiny glyphs from their precomputed banded ink profile (a few table taps, no curve reads)                          |
-| small text        | 8–16px   | slug ~2.2–3.4× faster — windfoil's remaining worst case: exactness is required, and its per-crossing ALU (multiple monotone solves + a polynomial) outweighs Slug's one solve + ramp |
-| reading / display | 32–64px  | slug ~1.2–1.6× faster                                                                                                                                                                |
-| magnified         | ≥ ~128px | windfoil ahead (up to ~1.5× at 8192px) — ~1 curve/pixel, no dual-ray tax                                                                                                             |
+| small text        | 8–16px   | slug ~1.4–2× faster — windfoil's remaining worst case: exactness is required, and its per-crossing work (a four-root clipped integral vs Slug's one solve + ramp) is structurally heavier |
+| reading / display | 32–64px  | ~parity (slug ~1.1× at 32px, dead even at 64px)                                                                                                                                      |
+| magnified         | ≥ ~64px  | windfoil ahead (up to ~1.4× at 8192px) — ~1 curve/pixel, no dual-ray tax                                                                                                             |
 
 windfoil trades per-pixel cost for exactness and used to degrade without bound at minification (many bands
 per footprint); the banded-ink guard now caps that entire regime at the point where text stops being legible
@@ -151,25 +153,25 @@ the 8–32px glyph levels above time punctuation through the fast approximate pa
   windfoil's exact area integral still edges it at the ultra-sharp ellipse **cusps** (Slug leaves a thin
   needle where two edges converge to a near-point). Mean |Δrgb| ≈ 0.0003 at the 256px check, concentrated at
   the cusps.
-- **Speed** — Slug is faster through the practical range (up to ~6× at 12px); windfoil overtakes from ~512px
-  (to ~2.6× at 8192px), where its footprint collapses to a single band and its compare-don't-solve far-curve
-  handling + single band axis win. This mid-zoom gap is structural: nearly every curve of the dense shape
-  spans a minified pixel's slab, so the exact integral is O(all curves) per pixel while Slug point-samples two
-  scanlines — and the shape stays clearly visible at these sizes, so the guard rightly won't approximate it.
+- **Speed** — Slug stays ahead only through 12–32px and only mildly (~1.6× at 12px, ~1.1× at 32px, down from
+  ~6× before the atlas-v3 round); windfoil overtakes from ~48px and runs away at magnification (~1.9× at
+  256px, ~4.5× at 8192px). The residual mid-zoom gap is the structural one: the true crossing curves of a
+  minified pixel's slab must each take the exact clipped integral, while Slug point-samples two scanlines —
+  and the shape stays clearly visible at these sizes, so the guard rightly won't approximate it.
 
 **Tiger (real SVG, 304 overlapping shapes):**
 
 - **Quality** — near-identical to windfoil (mean |Δrgb| ≈ 0.0016 at the 512px check, dominated by the
   sub-pixel whiskers — where windfoil is the one that matches a supersampled ground truth; see the
   implementation notes).
-- **Speed** — Slug leads at thumbnail/normal views (64px ~4.6×, 512px ~1.2×), windfoil from 1024px up
-  (~1.2–1.4×). The layered overdraw (a pixel runs one fragment per covering shape) rewards windfoil's cheaper
-  per-shape gather + single band axis once shapes reach a single-band footprint. Raising the guard dial
-  (`GUARD_PX` 3.7 → 8) buys another **1.9×** at 64px (23.4 ms) for approximated sub-8px features, with mean
-  error below the two algorithms' own AA-model difference — a knob for thumbnail-heavy workloads, off by
-  default.
-- **Memory** — the clearest win: windfoil's atlas is ~half of Slug's (**786 KB vs 1.6 MB** for this simplified
-  tiger; the repo README cites ~0.84 vs 1.54 MB for the full one). Same ~2× ratio.
+- **Speed** — Slug leads at thumbnail/normal views (64px ~2.8×, 512px ~1.1×, down from ~4.6×/1.2×), windfoil
+  from 1024px up (~1.05–1.5× across runs). The layered overdraw (a pixel runs one fragment per covering
+  shape) still rewards Slug's fixed two-ray loop at 64px — with ~7.5× overdraw the per-fragment fixed costs
+  dominate and windfoil's variable-trip gather diverges more per warp. Raising the guard dial
+  (`GUARD_PX` 3.7 → 8) remains the knob for thumbnail-heavy workloads, off by default.
+- **Memory** — windfoil's atlas is now ~3/4 of Slug's (**1.2 MB vs 1.6 MB** for this simplified tiger): the
+  band-clipped sub-pieces and per-piece cull metadata bought speed with some of the old 2× memory margin
+  (pre-v3 it was 786 KB — the single band axis itself still halves the raw curve storage).
 
 **Hairlines (AA quality — run with `--images` and look, no diff tools needed):**
 
@@ -212,6 +214,30 @@ range (banded-ink guard, ~5× faster), and **magnification** on all three scenes
 
 Core-algorithm changes tuned with this harness (mathematically coverage-preserving where exactness matters;
 the few f32 readback deltas are noted below; long-form engineering log in [`ACCEL-NOTES.md`](ACCEL-NOTES.md)):
+
+- **Atlas v3 — band-clipped pieces, F/E segments, prefix aggregation** (the big round; `src/bands.js` +
+  `src/windfoil.wgsl`). Pieces are stored clipped to their band (f64 polar-form restriction, split points
+  padded a few coordinate ULPs outward so windows always tile exactly), split into an F segment (spans the
+  whole band) and an E segment (real endpoint inside), each sorted by hull x-min descending with one packed
+  conservative-f16 cull word per piece. A fully-right F piece contributes exactly ±(window height) under any
+  window, so that prefix collapses to one signed-count multiply; the fully-right E prefix is one precomputed
+  span-sum read when the window covers the band, else a run of one-load clipped-span adds. Binary searches
+  find the prefix boundaries; the scan tails break on a per-band max-hull-width bound. Together with the
+  branchless integral below: glyphs@8px **3.25 → 2.03 ms**, shape@12px **35.9 → 8.96 ms**, tiger@64px
+  **40.0 → 27.8 ms**, and every crossover moved down (shape ahead of Slug from ~48px instead of ~512px,
+  glyphs from ~64px instead of ~128px, hairlines ahead at every level, up to ~5×). Exactness: the validation
+  suite is unchanged (common-shape mean 0.00012, §5 of ALGORITHM.md); per-level renders differ from the
+  pre-v3 shader by at most 1–2 8-bit code values on ≲0.1% of pixels (f32 rounding-association changes — the
+  same class as the earlier band-scale pass), and the minification guard's output is bit-faithful (small
+  shapes keep their original band count).
+- **Branchless vec4 `integrate_piece`**: all four clip roots (y-window entry/exit, x = ∓hx) solved as one
+  straight-line vec4 discriminant/sqrt/select/divide batch with mono_root's exact saturation semantics as
+  component-wise selects. Bit-exact, and worth +7–36% alone (biggest where straddle solves dominate); it
+  also made the near-linear special case provably redundant for monotone pieces (sign(a1) matches the sweep
+  direction, so the stable q-form branch is always taken).
+- **√-banding for large shapes**: band count R ≈ √(n/2) for shapes above ~60 pieces (small shapes keep the
+  fixed ~10-per-band rule so the guard profile is unchanged). Fewer, longer bands suit the new economics —
+  prefix jumps make long bands cheap while fewer bands cut per-fragment setups and duplication.
 
 - **`TARGET_PER_BAND` 6 → 10** (`src/bands.js`). Coarser bands cost windfoil almost nothing per extra piece
   (early-break + clamp/subtract far curves, no solve) while a footprint spans fewer of them — ~8–19% faster at

@@ -174,22 +174,34 @@ comparable to Skia there.
 
 On its own the integral is a per-pixel loop over every curve — fine for a glyph, useless for a scene. The
 acceleration structure fixes that ([`../src/bands.js`](../src/bands.js) builds it; `integrate_face` reads it):
-each shape's monotone pieces are filed into horizontal **row bands** over its y-extent (`~10` pieces per band —
-benchmarked in [`../bench/README.md`](../bench/README.md)), and a fragment reads only the bands its pixel's
-y-slab touches. Three properties, all from the integral
+each shape's monotone pieces are filed into horizontal **row bands** over its y-extent (band count `R ≈ √(n/2)`
+for large shapes, the fixed `~10`-pieces-per-band rule for small ones — benchmarked in
+[`../bench/README.md`](../bench/README.md)), and a fragment reads only the bands its pixel's
+y-slab touches. Four properties, all from the integral
 sweeping along `x` inside a horizontal slab:
 
 1. **One band axis, not two.** Integration is horizontal, so a row band holds everything a fragment needs — no
    vertical ray, no column bands. A dual-ray method (Slug) casts a ray on each axis and needs a second band
    structure; a single axis halves both the structure and the per-fragment reads.
 
-2. **Window additivity — exact, no dedupe.** A piece is filed into every band its y-extent touches; a pixel
-   straddling a boundary reads each band clipped to that band's y-range. The windows tile the slab, so a
-   duplicated piece is integrated over disjoint windows and summing bands is exact. Filing and lookup share the
-   identical `floor((y − y0)·invH)` mapping, so they always agree.
+2. **Window additivity — exact, no dedupe.** A piece is CLIPPED to every band its y-extent touches (the f64
+   polar-form restriction of the same curve, extended a few coordinate ULPs past each split so a band's
+   sub-piece always spans its whole window under f32 edge arithmetic). A pixel straddling a boundary reads
+   each band clipped to that band's y-range; the windows tile the slab, so sub-pieces are integrated over
+   disjoint windows and summing bands is exact. Filing and lookup share the identical `floor((y − y0)·invH)`
+   mapping, so they always agree. Clipping keeps every stored hull band-tight, which is what makes the
+   per-piece cull metadata below decisive rather than optimistic.
 
-3. **Early break.** Pieces in a band are sorted by hull x-max descending, so the shader stops once a curve is
-   fully left of the pixel — every later one contributes `0`.
+3. **Segments + prefix aggregation.** Each band's sub-pieces split into an **F segment** (spans the whole
+   band) and an **E segment** (has a real endpoint inside the band), both sorted by hull x-min descending
+   and carrying one packed conservative-f16 cull word per piece. Under any window, a fully-right F piece
+   contributes exactly `±(window height)`, so the fully-right F prefix collapses to one signed-count
+   multiply; the fully-right E prefix collapses to one precomputed span-sum read when the window covers the
+   band, or a run of one-load clipped-span adds when it doesn't. Binary searches over the sorted f16 keys
+   find both prefixes without walking them.
+
+4. **Early break.** Within each segment, once a piece's x-min drops below the pixel by more than the band's
+   maximum hull width, every later piece is fully left and the scan stops.
 
 This trades the scanline prefix sum for a spatial lookup: the "everything to the right" dependency is already
 in the `clamp` (§2), so a band only has to _find_ nearby curves, not accumulate through them.

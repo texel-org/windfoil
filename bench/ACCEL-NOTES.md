@@ -117,3 +117,47 @@ or move whole instances to a separate cheap path at coherent granularity (the gu
   silently broke grazing-curve ramp cancellation when the discriminant clamps to zero (the shape-rim fringe
   and tiger-8192 lines — our port bug, fixed by folding to the shared extremum root `b/a` when `d == 0`,
   verified bit-parity with the reference forms via a CPU replica in both f32 and f64).
+
+## Round 3 — atlas v3: clip, segment, aggregate (the divergence round)
+
+CPU replicas of both fragment loops (tools/coststats.js, tools/v3stats.js) showed the deficit was
+**divergence-shaped, not count-shaped**: per-lane ALU predicted near-parity with Slug at glyphs@8px while the
+measured gap was 3.25× — a 32-lane warp-lockstep roll-up reconciled the dense cells almost exactly, and
+windfoil's 5-way per-piece branch (far-left / y-skip / far-right / ulp / straddle) serialized roughly twice as
+hard as Slug's flat loop. False straddles (whole-piece hulls spanning the pixel column even though the piece's
+arc in THIS band is far away) were 53–81% of straddle visits on the dense shape.
+
+What shipped (each step byte-diffed against stashed baseline renders and gated by `deno task validate`):
+
+1. **Branchless vec4 integrate_piece** — the four mono_root calls become one vec4 solve; saturation stays as
+   selects on the SAME expressions, so it is bit-exact. +7–36% depending on regime. (An earlier note said
+   select-flattening mono_root cost 25% — that flattened the saturation tests inside four still-serial scalar
+   calls; batching the four solves is what pays.)
+2. **Band-clipped pieces** (build only) — the stored piece is the f64 polar-form restriction to its band,
+   split points computed once and padded a few coordinate ULPs OUTWARD so every sub-piece spans its whole
+   window under rc-relative f32 edge arithmetic: windows tile with no sliver lost, no double-count, and the
+   pad overhang lies outside every window so its size never reaches the output. Tight hulls kill the false
+   straddles; renders move by ≤1 code value on a handful of pixels (the split points' single f32 rounding).
+3. **F/E segments + prefix aggregation + packed f16 cull words** — see README. The signed-count trick is
+   exact under ANY window (an F piece's clipped span always contains the window), so it needs no covered-band
+   gate; the E span-sum prefix does (span sums assume no clamp binds).
+4. **Binary-searched prefixes, inline-break tails** — the linear jump-find walks were 40–57% of all meta
+   loads at the dense cells; binary search over the monotone f16 keys cut shape@12px by 30%. The
+   symmetric move (binary-searching the break bound too) LOST — an inline break in the scan tail is cheaper
+   than a fourth dependent-load search chain (+10–21% hybrid win, biggest on tiger).
+5. **√-banding** — R ≈ √(n/2) for large shapes; small shapes keep ceil(n/10) so the guard's banded-ink
+   profile stays bit-identical (√ would have REFINED small shapes' bands and shifted guarded punctuation
+   by up to 22 code values — caught by masking the per-instance guard set and diffing outside it).
+
+Measured and rejected this round, same bloat rule as ever: band-level hull tests in the face loop (H1 vec4
+reads — a rerun of the round-2 rejection, still −10–20%), count-gated linear/binary search hybrids (−15%),
+a flat-scan E loop for F-empty bands (−18–27% — the second compiled loop taxes everything), and stripping
+the guard/profile path (±0% — it was never the register problem).
+
+Where it landed vs Slug (Apple M2, quiet GPU): glyphs 8px 2.0× behind → parity at 64px → ahead ≥128px;
+shape 1.56× behind at 12px → ahead from 48px (4.5× at 8192px); tiger 2.8× behind at 64px → ~parity at
+512–1024px; hairlines ahead everywhere (to 5.3×). The residual mid-zoom gap is the exactness bill itself:
+the true crossing curves of a slab must each take a four-root clipped integral, ~1.7× Slug's one-root ramp
+per crossing, on top of Slug's fixed-trip loops diverging less than any gather can. A summed-mass ("M(u)")
+per-band table with edge-column corrections could collapse the interior integrals of covered bands too —
+sketched, not built: it only fires where windows cover bands, and the estimate lands at parity, not ahead.
