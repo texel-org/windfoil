@@ -117,3 +117,54 @@ or move whole instances to a separate cheap path at coherent granularity (the gu
   silently broke grazing-curve ramp cancellation when the discriminant clamps to zero (the shape-rim fringe
   and tiger-8192 lines — our port bug, fixed by folding to the shared extremum root `b/a` when `d == 0`,
   verified bit-parity with the reference forms via a CPU replica in both f32 and f64).
+
+## Shelved: atlas v3 — the rest of the mid-zoom gap (branch `windfoil-atlas-v3`)
+
+A full rebuild of the atlas + gather was built, validated, and benchmarked, closing most of the remaining
+mid-zoom gap to Slug — but it is too sweeping for the reference project. It lives complete (code, docs,
+CPU-replica profiling tools) on branch **`windfoil-atlas-v3`**; this section is the map back to it. The
+shipped branchless integral (PR #11) is independent of all of it.
+
+In dependency order, with measured per-frame deltas on the zoom-ladder bench (Apple M2):
+
+1. **Band-clipping** — file each piece CLIPPED to its band (f64 polar-form restriction, split points padded
+   a few coordinate ULPs outward so rc-relative f32 windows still tile exactly; the pad overhang lies
+   outside every window, so its size never reaches the output). Tight per-band hulls reclassify the false
+   straddles — 53–81% of straddle visits on dense content — into the existing cheap paths: **+18%
+   glyphs@8px, +22% shape@12px** on the unchanged shader and atlas format. ~100 build-side lines; the ONE
+   piece extractable to the reference project on its own, if ever wanted. (Its cheapest slice — dropping
+   zero-y-span pieces at build — already landed separately via PR #12; the measured deltas above include it.)
+2. **F/E-segmented atlas with prefix aggregation** — per band, full-band-span (F) and endpoint (E) segments,
+   sorted by hull x-min descending, one packed conservative-f16 cull word per piece. A fully-right F piece
+   contributes exactly ±(window height) under ANY window, so that prefix collapses to a signed-count
+   multiply; the fully-right E prefix is one precomputed span-sum read when the window covers the band, else
+   a run of one-load clipped-span adds. Requires a new row layout (two vec4u headers per band) and a gather
+   rewrite — the reason this can't land piecemeal.
+3. **Binary-searched prefix finds + inline-break scan tails** — the linear jump-find walks were 40–57% of
+   all metadata loads in the dense cells; searching the monotone f16 keys was **+30% at shape@12px**, and
+   keeping the *break* bound as an inline test instead of a fourth search chain another **+10–21%**.
+4. **E metadata with exact span endpoints inline** — the far-right cheap path becomes one 8-byte
+   cache-adjacent load and the y-cull becomes exact.
+5. **√-banding** — R ≈ √(n/2) for large shapes (small shapes keep ceil(n/10) so the guard profile stays
+   bit-identical). Only pays on top of the v3 cull words; on the current shader coarser bands lengthen the
+   expensive scans.
+
+Where it lands, all together: glyphs@8px 3.25 → 2.03 ms, shape@12px 35.9 → 8.96 ms, tiger@64px 40 → 27.8 ms;
+the beat-Slug crossover moves from ~128–512px down to ~48–64px on every scene, shape magnification reaches
+4.5× ahead and hairlines 1.35–5.3× ahead at every level. Exactness holds: `deno task validate` unchanged
+(common-shape mean 0.00012), per-level renders within 1–2 8-bit code values on ≲0.1% of pixels (the
+rounding-association class), the guard bit-faithful. Cost: atlas bytes grow with the metadata (tiger 786 KB →
+1.2 MB, still under Slug's 1.6 MB), and the Slug bench side needs a frozen copy of the old filer.
+
+**The measured limit** (why "2× faster than Slug everywhere" wasn't reached): subtracting a null-shader
+frame floor from both renderers, that bar requires windfoil's exact coverage math to run 2–5× cheaper than
+Slug's sampled math — while the true crossing integrals alone (the work exactness cannot skip) already
+exceed that budget in the losing cells. Confirmed same shape on NVIDIA/Vulkan, so it is the algorithmic
+trade, not Metal.
+
+**Measured and rejected on the branch** (same bloat rule as ever — don't retry): band-level hull pre-tests
+in the face loop (−10–20%), count-gated linear/binary search hybrids (−15%), a flat-scan E loop for F-empty
+bands (−18–27%), guard-path stripping (±0%, it was never the register problem). **Bounded but unbuilt**: a
+covered-band summed-mass table (≈15% at shape@12px only, per the traversal data), per-shape band-axis
+choice for extreme-aspect shapes. The CPU traversal replicas that produced these bounds are
+`tools/coststats.js` and `tools/v3stats.js` on the branch.
