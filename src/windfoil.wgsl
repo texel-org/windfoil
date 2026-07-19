@@ -146,27 +146,53 @@ fn integrate_inside(a2 : vec2<f32>, a1 : vec2<f32>, x0 : f32, ta : f32, tb : f32
 }
 
 // Integrate clamp(x(t), −hx, hx)+hx over the y-window through LEFT (0), INSIDE (exact), and RIGHT
-// (full-width) zones (ALGORITHM.md §3).
+// (full-width) zones (ALGORITHM.md §3). The four clip roots are solved as one branchless vec4 batch with
+// mono_root's saturation semantics.
 fn integrate_piece(q1 : vec2<f32>, q2 : vec2<f32>, q3 : vec2<f32>, lo : f32, hi : f32, hx : f32) -> f32 {
   let a2 = q1 - 2.0 * q2 + q3;
   let a1 = 2.0 * (q2 - q1);
   let y_rising = q3.y >= q1.y;
-  let t_lo = mono_root(a2.y, a1.y, q1.y, q3.y, select(hi, lo, y_rising), y_rising);
-  let t_hi = mono_root(a2.y, a1.y, q1.y, q3.y, select(lo, hi, y_rising), y_rising);
-  if (t_hi <= t_lo) { return 0.0; }
   let x_rising = q3.x >= q1.x;
-  let t_left = clamp(mono_root(a2.x, a1.x, q1.x, q3.x, -hx, x_rising), t_lo, t_hi);
-  let t_right = clamp(mono_root(a2.x, a1.x, q1.x, q3.x, hx, x_rising), t_lo, t_hi);
+  let vy = select(vec2<f32>(hi, lo), vec2<f32>(lo, hi), y_rising);
+
+  let A2 = vec4<f32>(a2.yy, a2.xx);
+  let A1 = vec4<f32>(a1.yy, a1.xx);
+  let A0 = vec4<f32>(q1.yy, q1.xx);
+  let E1 = vec4<f32>(q3.yy, q3.xx);
+  let V  = vec4<f32>(vy, -hx, hx);
+  let R  = vec4<bool>(vec2<bool>(y_rising), vec2<bool>(x_rising));
+  let SG = select(vec4<f32>(-1.0), vec4<f32>(1.0), R);
+
+  let C = A0 - V;
+  let sat0 = (C * SG) >= vec4<f32>(0.0);
+  let sat1 = ((E1 - V) * SG) <= vec4<f32>(0.0);
+  let disc = max(A1 * A1 - 4.0 * A2 * C, vec4<f32>(0.0));
+  let sq = sqrt(disc);
+  let qq = -0.5 * (A1 + select(-sq, sq, A1 >= vec4<f32>(0.0)));
+  let use_r1 = (A1 < vec4<f32>(0.0)) == R;
+  let num = select(C, qq, use_r1);
+  let den = select(qq, A2, use_r1);
+  let valid = den != vec4<f32>(0.0);
+  let t_raw = clamp(
+    select(vec4<f32>(0.0), num / select(vec4<f32>(1.0), den, valid), valid),
+    vec4<f32>(0.0), vec4<f32>(1.0),
+  );
+  let T = select(select(t_raw, vec4<f32>(1.0), sat1), vec4<f32>(0.0), sat0);
+
+  let t_lo = T.x;
+  let t_hi = T.y;
+  if (t_hi <= t_lo) { return 0.0; }
+  let t_left = clamp(T.z, t_lo, t_hi);
+  let t_right = clamp(T.w, t_lo, t_hi);
   // Zones in sweep order: x rising ⇒ LEFT · INSIDE · RIGHT; mirrored if not.
   let t1 = select(t_right, t_left, x_rising);
   let t2 = max(select(t_left, t_right, x_rising), t1);
   var acc = integrate_inside(a2, a1, q1.x, t1, t2, hx);
   let ra = select(t_lo, t2, x_rising);
   let rb = select(t1, t_hi, x_rising);
-  if (rb > ra) {
-    let tm = 0.5 * (ra + rb);
-    acc += (rb - ra) * (2.0 * a2.y * tm + a1.y) * (2.0 * hx);   // RIGHT zone: full width × Δy
-  }
+  let d = max(rb - ra, 0.0);
+  let tm = 0.5 * (ra + rb);
+  acc += d * (2.0 * a2.y * tm + a1.y) * (2.0 * hx);   // RIGHT zone: full width × Δy
   return acc;
 }
 
