@@ -21,158 +21,25 @@
 //   • diff — |ours − box|, the error, as a heat map
 // It also prints exact coverage at the worst pixel + how the error degrades with size and winding multiplicity.
 
-import { renderToRGBA } from '../src/gpu.js';
-import { pushMonotonePieces } from '../src/geometry.js';
-import { bandPieces } from '../src/bands.js';
 import { encodePNG } from '../src/png.js';
+import { requestDevice } from '../src/gpu.js';
 import { createCanvas } from '@napi-rs/canvas';
+import { absDiff, canvasCoverage, pointCoverage, windfoilCoverage, windingAt } from './common/coverage.js';
+import { polygon, rect, starPts } from './common/shapes.js';
+import { svgDocument } from './common/svg.js';
 
 const S = 128; // cell size in px (whole-shape render)
 const F = 24; // point-sample grid per pixel for the box-filter ground truth
 
-// ── geometry helpers (flat quads [x0,y0,cx,cy,x1,y1,...], a line = a midpoint quad; same convention as validate) ─
-function line(x0, y0, x1, y1) {
-  return [x0, y0, (x0 + x1) / 2, (y0 + y1) / 2, x1, y1];
-}
-function polygon(pts) {
-  const out = [];
-  for (let i = 0; i < pts.length; i++) out.push(...line(...pts[i], ...pts[(i + 1) % pts.length]));
-  return out;
-}
-// Axis-aligned rectangle as a closed contour. dir = +1 or −1 flips the traversal, flipping its winding sign.
-function rect(x0, y0, x1, y1, dir = 1) {
-  const cs = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
-  return polygon(dir >= 0 ? cs : cs.slice().reverse());
-}
-
-// ── our shader coverage (identical scene build to validate.js) ─────────────────────────────────────────
-function buildScene(quads, evenodd) {
-  const pieces = [];
-  for (let i = 0; i < quads.length; i += 6) pushMonotonePieces(quads.slice(i, i + 6), pieces);
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (let i = 0; i < pieces.length; i += 2) {
-    x0 = Math.min(x0, pieces[i]);
-    x1 = Math.max(x1, pieces[i]);
-    y0 = Math.min(y0, pieces[i + 1]);
-    y1 = Math.max(y1, pieces[i + 1]);
-  }
-  const curveOut = [], rowOut = [];
-  const { rowBase, bandCount, bandH, invH } = bandPieces(pieces, y0, y1, curveOut, rowOut);
-  const rule = evenodd ? 1 : 0;
-  const instances = new Float32Array([
-    0,
-    0,
-    1,
-    rule,
-    x0,
-    y0,
-    x1,
-    y1,
-    1,
-    1,
-    1,
-    1,
-    rowBase,
-    bandCount,
-    bandH,
-    invH,
-  ]);
-  return { curves: new Float32Array(curveOut), rows: new Uint32Array(rowOut), instances };
-}
-async function ourCoverage(quads, evenodd = false, size = S) {
-  const { curves, rows, instances } = buildScene(quads, evenodd);
-  const rgba = await renderToRGBA({
-    width: size,
-    height: size,
-    background: [0, 0, 0, 1],
-    curves,
-    rows,
-    instances,
-    instanceCount: 1,
-  });
-  const out = new Float64Array(size * size);
-  for (let i = 0; i < out.length; i++) out[i] = rgba[i * 4] / 255;
-  return out;
-}
-
-// ── ground-truth box filter: winding by ray-casting the raw curves, averaged over an F×F sub-sample grid ─
-function windingAt(px, py, quads) {
-  let W = 0, K = 0;
-  for (let i = 0; i < quads.length; i += 6) {
-    const x0 = quads[i],
-      y0 = quads[i + 1],
-      cx = quads[i + 2],
-      cy = quads[i + 3],
-      x1 = quads[i + 4],
-      y1 = quads[i + 5];
-    if ((y0 < py && cy < py && y1 < py) || (y0 > py && cy > py && y1 > py)) continue;
-    const a = y0 - 2 * cy + y1, b = 2 * (cy - y0), c = y0 - py;
-    let t0 = -1, t1 = -1;
-    if (Math.abs(a) < 1e-9) {
-      if (Math.abs(b) > 1e-12) t0 = -c / b;
-    } else {
-      const disc = b * b - 4 * a * c;
-      if (disc >= 0) {
-        const sq = Math.sqrt(disc);
-        t0 = (-b + sq) / (2 * a);
-        t1 = (-b - sq) / (2 * a);
-      }
-    }
-    for (const t of [t0, t1]) {
-      if (t < 0 || t > 1) continue;
-      const xt = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * cx + t * t * x1;
-      if (xt > px) {
-        K++;
-        const dy = 2 * a * t + b;
-        W += dy >= 0 ? 1 : -1;
-      }
-    }
-  }
-  return { W, K };
-}
-function boxCoverage(quads, evenodd = false, size = S) {
-  const out = new Float64Array(size * size);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      let inside = 0;
-      for (let j = 0; j < F; j++) {
-        for (let i = 0; i < F; i++) {
-          const { W, K } = windingAt(x + (i + 0.5) / F, y + (j + 0.5) / F, quads);
-          if (evenodd ? (K & 1) === 1 : W !== 0) inside++;
-        }
-      }
-      out[y * size + x] = inside / (F * F);
-    }
-  }
-  return out;
-}
-
-// ── skia (@napi-rs/canvas) coverage ────────────────────────────────────────────────────────────────────
-function skiaCoverage(quads, evenodd = false, size = S) {
-  const ctx = createCanvas(size, size).getContext('2d');
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, size, size);
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  let px = null, py = null;
-  for (let i = 0; i < quads.length; i += 6) {
-    const [x0, y0, cx, cy, x1, y1] = quads.slice(i, i + 6);
-    if (px === null || Math.abs(x0 - px) > 1e-4 || Math.abs(y0 - py) > 1e-4) {
-      if (px !== null) ctx.closePath();
-      ctx.moveTo(x0, y0);
-    }
-    ctx.quadraticCurveTo(cx, cy, x1, y1);
-    px = x1;
-    py = y1;
-  }
-  ctx.closePath();
-  ctx.fill(evenodd ? 'evenodd' : 'nonzero');
-  const d = ctx.getImageData(0, 0, size, size).data;
-  const out = new Float64Array(size * size);
-  for (let i = 0; i < out.length; i++) out[i] = d[i * 4] / 255;
-  return out;
-}
-
+// The three coverage sources are the shared ones (tools/common/coverage.js) — the same code validate.js and
+// comparison.js measure with, so a number printed here is directly comparable to one printed there. These
+// wrappers just pin this tool's defaults: the S×S cell, the F×F box-filter grid, and one shared GPU device.
+const device = await requestDevice();
+const createContext2D = (w, h) => createCanvas(w, h).getContext('2d');
+const ourCoverage = (quads, evenodd = false, size = S) => windfoilCoverage(quads, { size, evenodd, device });
+const boxCoverage = (quads, evenodd = false, size = S) => pointCoverage(quads, { size, evenodd, samples: F });
+const skiaCoverage = (quads, evenodd = false, size = S) =>
+  canvasCoverage(createContext2D, quads, { size, evenodd });
 // ── image compositing: coverage buffers → labelled, magnified PNG panels ────────────────────────────────
 const GRID = [70, 74, 96], MARK = [232, 120, 40]; // pixel-grid line, failing-pixel outline
 const gray = (v) => {
@@ -213,24 +80,6 @@ function magnify(cov, w, region, mag, color, mask) {
   return { rgba: out, w: W, h: H };
 }
 
-// The quad path as an SVG `d` string: each contour opens with M at its start, then one Q per edge (the
-// straight edges are exact degenerate quadratics — the same representation the shader consumes). A new
-// contour starts wherever an edge's start point doesn't continue the previous edge's end.
-const num = (n) => (Number.isInteger(n) ? `${n}` : `${+n.toFixed(3)}`);
-function svgPath(quads) {
-  let d = '', px = null, py = null;
-  for (let i = 0; i < quads.length; i += 6) {
-    const [x0, y0, cx, cy, x1, y1] = quads.slice(i, i + 6);
-    if (px === null || Math.abs(x0 - px) > 1e-4 || Math.abs(y0 - py) > 1e-4) {
-      d += `${d ? 'Z ' : ''}M ${num(x0)} ${num(y0)} `;
-    }
-    d += `Q ${num(cx)} ${num(cy)} ${num(x1)} ${num(y1)} `;
-    px = x1;
-    py = y1;
-  }
-  return `${d}Z`;
-}
-
 const outDir = new URL('../output/failure/', import.meta.url);
 Deno.mkdirSync(outDir, { recursive: true });
 const writePNG = (name, panel) => {
@@ -241,21 +90,19 @@ const writePNG = (name, panel) => {
 // by any conformant SVG engine this shows the CORRECT fill (a solid square for A, a left rect for B) — i.e. what
 // the winding fold gets wrong. Checkerboard backdrop so anti-aliased edges read on both light and dark.
 const writeSVG = (name, quads, evenodd, note) => {
-  const rule = evenodd ? 'evenodd' : 'nonzero';
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${S} ${S}" width="${S}" height="${S}">\n` +
-    `  <!-- ${note} · fill-rule: ${rule} -->\n` +
-    `  <path d="${svgPath(quads)}" fill="#111" fill-rule="${rule}"/>\n` +
-    `</svg>\n`;
+  const svg = svgDocument({
+    quads,
+    width: S,
+    height: S,
+    evenodd,
+    fill: '#111',
+    background: null, // transparent: these are diagrams of a shape, not coverage renders
+    comment: note,
+  });
   Deno.writeFileSync(new URL(`${name}.svg`, outDir), new TextEncoder().encode(svg));
   return `${name}.svg`;
 };
 
-function absDiff(a, b) {
-  const d = new Float64Array(a.length);
-  for (let i = 0; i < a.length; i++) d[i] = Math.abs(a[i] - b[i]);
-  return d;
-}
 function worstPixel(diff, w, h) {
   let m = -1, mi = 0;
   for (let i = 0; i < diff.length; i++) {
@@ -412,14 +259,6 @@ const C = await renderCase(
 // Where DOES windfoil "tie" skia (§4/§5)? Only sub-pixel slivers at a SHARP self-intersection. Measure the
 // {5/2} star (nonzero) — a single self-intersecting contour with a w=2 core and thin points — with no images,
 // just the worst-pixel deltas, to show both renderers deviate there (unlike the clean overlap above).
-function starPts(cx, cy, r, points, step) {
-  const p = [];
-  for (let k = 0; k < points; k++) {
-    const a = -Math.PI / 2 + ((k * step) % points) * (2 * Math.PI / points);
-    p.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
-  }
-  return p;
-}
 {
   const star = polygon(starPts(64, 64, 52, 5, 2));
   const o = await ourCoverage(star), b = boxCoverage(star), sk = skiaCoverage(star);

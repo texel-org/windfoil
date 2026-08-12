@@ -9,7 +9,8 @@ import { loadFont } from '../src/font.js';
 import { requestDevice } from '../src/gpu.js';
 import { encodePNG } from '../src/png.js';
 import { createCanvas } from '@napi-rs/canvas';
-import { AMP, diffRGBA, F, grayRGBA, S, slug, validateShapes } from './validate/harness.js';
+import { AMP, diffRGBA, grayRGBA, slugify, upscale } from './common/images.js';
+import { F, S, validateShapes } from './validate/harness.js';
 
 const font = await loadFont(new URL('../assets/Lato-Regular.ttf', import.meta.url));
 const device = await requestDevice();
@@ -81,20 +82,11 @@ const Z = 4, C = S * Z; // 4× nearest-neighbour upscale so individual pixels st
 const outDir = new URL('../output/validation/', import.meta.url);
 Deno.mkdirSync(outDir, { recursive: true });
 
-const upscale = (src) => {
-  const d = new Uint8Array(C * C * 4);
-  for (let y = 0; y < C; y++) {
-    for (let x = 0; x < C; x++) {
-      const o = (y * C + x) * 4, s = (((y / Z) | 0) * S + ((x / Z) | 0)) * 4;
-      d[o] = src[s]; d[o + 1] = src[s + 1]; d[o + 2] = src[s + 2]; d[o + 3] = 255;
-    }
-  }
-  return d;
-};
-const write = (name, rgba) => Deno.writeFileSync(new URL(`${name}.png`, outDir), encodePNG(upscale(rgba), C, C));
+const write = (name, rgba) =>
+  Deno.writeFileSync(new URL(`${name}.png`, outDir), encodePNG(upscale(rgba, S, S, Z), C, C));
 
 for (const { label, ours, slug: slugCov, skia, box } of panels) {
-  const s = slug(label);
+  const s = slugify(label);
   write(`${s}_ours`, grayRGBA(ours));
   write(`${s}_skia`, grayRGBA(skia));
   write(`${s}_slug`, grayRGBA(slugCov));

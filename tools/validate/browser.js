@@ -8,7 +8,8 @@
 
 import { loadFont } from '../../src/font.js';
 import { requestDevice } from '../../src/gpu.js';
-import { AMP, diffRGBA, F, grayRGBA, S, validateShapes } from './harness.js';
+import { AMP, diffRGBA, grayRGBA } from '../common/images.js';
+import { F, S, validateShapes } from './harness.js';
 
 const $ = (sel) => document.querySelector(sel);
 const el = (tag, className, text) => {

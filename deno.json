@@ -2,6 +2,9 @@
   "tasks": {
     "render": "deno run --unstable-webgpu -A src/main.js",
     "validate": "deno run --unstable-webgpu -A tools/validate.js",
+    "comparison": "deno run --unstable-webgpu -A tools/comparison.js",
+    "diff": "deno run -A tools/diff.js",
+    "crop": "deno run -A tools/crop.js",
     "failure": "deno run --unstable-webgpu -A tools/failure.js",
     "serve": "deno run -A jsr:@std/http@^1/file-server --port 8080 .",
     "cert": "deno run -A tools/gen-cert.js",
