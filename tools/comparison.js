@@ -25,7 +25,8 @@
 //             the baseline that shows what the other four are buying.
 //   windfoil  this repo's shader (src/windfoil.wgsl).
 //   slug      the benchmark's Slug port (bench/slug.wgsl) — the other analytic AA model.
-//   chrome    @napi-rs/canvas, i.e. Skia: the production rasteriser Chrome ships.
+//   skia      @napi-rs/canvas, i.e. Skia: the production rasteriser Chrome ships. Named for the library,
+//             not the browser — it is Skia being measured here, through Node bindings, not Chrome.
 //
 // Plus scene.svg, the same geometry as a path, so an SVG engine (Figma, a browser, Illustrator) can be
 // dropped into the comparison as one more renderer: it emits the identical quadratics with the identical
@@ -100,7 +101,7 @@ const RENDERERS = [
     run: () => windfoilCoverage(quads, { ...common, device, exact }),
   },
   { name: 'slug', title: 'bench/slug.wgsl', run: () => slugCoverage(quads, { ...common, device }) },
-  { name: 'chrome', title: '@napi-rs/canvas (Skia)', run: () => canvasCoverage(createContext2D, quads, common) },
+  { name: 'skia', title: '@napi-rs/canvas (Skia)', run: () => canvasCoverage(createContext2D, quads, common) },
 ];
 
 console.log(

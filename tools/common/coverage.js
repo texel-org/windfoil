@@ -2,8 +2,8 @@
 //
 // All four take the same flat quads (./shapes.js) and return the same thing: a Float64Array of size*size
 // values in 0..1, linear, 1 = fully covered. Because the input geometry and the output format are identical,
-// any two of them subtract directly — which is the whole basis of tools/validate.js, tools/failure.js and
-// tools/comparison.js.
+// any two of them subtract directly — which is what lets ./renderers.js hold them in one list, and what
+// tools/validate.js, tools/failure.js and tools/comparison.js are all built on.
 //
 //   windfoilCoverage — the windfoil shader itself (src/windfoil.wgsl via renderToRGBA), 8-bit readback.
 //   slugCoverage     — the benchmark's Slug port (bench/slug.wgsl): the other analytic AA model, same pipeline.
@@ -12,9 +12,10 @@
 //   pointCoverage    — the mathematical box filter, estimated by point-sampling an N×N grid per pixel with
 //                      winding computed by ray casting the RAW curves. It shares no code and no model with
 //                      the shader, so it is a genuine independent reference rather than a self-comparison,
-//                      and it is right on the cases the winding fold gets wrong. Its own noise is ~1/N, so
-//                      it settles the shape of an error and any bias; at N=1 it degenerates to the classic
-//                      binary "is the pixel centre inside?" fill, which is a useful renderer in its own right.
+//                      and it is right on the cases the winding fold gets wrong. Its residual falls roughly
+//                      as 1/N², and how far it has actually fallen is measured rather than assumed — see the
+//                      `truth/2` control in ./renderers.js. At N=1 it degenerates to the classic binary "is
+//                      the pixel centre inside?" fill, which is a useful renderer in its own right.
 
 import { renderToRGBA } from '../../src/gpu.js';
 import { pushMonotonePieces } from '../../src/geometry.js';
@@ -197,7 +198,9 @@ export function windingAt(px, py, quads) {
  * re-solving the quads per column. A pixel that no crossing falls inside is uniform across all N of its
  * samples, so it is filled in one step; the per-sample loop only runs where an edge actually is.
  */
-export function pointCoverage(quads, { size, evenodd = false, samples = 24 } = {}) {
+// `samples` has no default worth having: how sharp the reference must be is a property of the shapes and of
+// the precision a caller intends to claim, so every caller states it (and ./renderers.js checks it).
+export function pointCoverage(quads, { size, evenodd = false, samples } = {}) {
   const N = samples;
   const out = new Float64Array(size * size);
   const cap = (quads.length / 6) * 2;
@@ -247,41 +250,76 @@ export function pointCoverage(quads, { size, evenodd = false, samples = 24 } = {
 }
 
 // ── compare ─────────────────────────────────────────────────────────────────────────────────────────────
-/** Mean and worst-pixel |Δcoverage| between two buffers. */
-export function stats(a, b) {
-  let sum = 0, max = 0;
+/** A coverage value as the 8-bit code an image actually stores. */
+const code = (v) => Math.round(Math.max(0, Math.min(1, v)) * 255);
+
+/**
+ * How far a coverage buffer sits from a reference. One mean invites three fair objections — it is diluted by
+ * trivially-correct pixels, it hides the worst case, and it is not even comparable between render sizes — so
+ * this returns the answer to all three, which costs a few adds in a loop we are running anyway:
+ *
+ *   bandMean  mean |Δ| over the ANTI-ALIASED BAND alone: the pixels where the reference is strictly between
+ *             empty and full. **This is the figure to report.** A whole-image mean is not comparable across
+ *             sizes — the error lives on edges, and edge pixels grow with the perimeter (∝ size) while the
+ *             divisor grows with the area (∝ size²), so the mean falls ~1/size for reasons that have nothing
+ *             to do with a renderer's quality: doubling the render makes every engine look twice as good.
+ *             Averaged over the band instead, the same renderer scores the same at 128px and at 2048px, so
+ *             the number is a property of the algorithm rather than of the frame it was drawn in.
+ *   band      how many pixels that is. `bandSum` is kept raw so many shapes pool into one band mean
+ *             (sum/count) rather than an average of averages, which would weight a shape with 300 band
+ *             pixels the same as one with 3000.
+ *   bias      mean SIGNED (a − reference) over the band. It separates a one-directional error — a
+ *             compositing or colour-space mismatch, which pushes every edge the same way — from ordinary
+ *             anti-aliasing disagreement, which is close to zero-mean. A bias near the size of `bandMean`
+ *             means the difference is not AA quality at all.
+ *   mean      mean |Δ| over every pixel. Kept because it is what most tools quote, and because the gap
+ *             between it and `bandMean` is exactly the dilution being warned about.
+ *   max       the worst single pixel.
+ *   off       how many pixels land more than ONE 8-bit code value from the reference. A count, so no amount
+ *             of empty background can dilute it, and it is the question an image asks: at the precision the
+ *             output has, is this pixel the reference's pixel? `off: 0` means indistinguishable, everywhere.
+ *
+ * `mask` chooses which pixels count as the band, for callers whose difference is not against the reference
+ * itself — a delta-vs-zero buffer has no band of its own, so it borrows the target's (see tools/diff.js).
+ */
+export function stats(a, b, mask = b) {
+  let sum = 0, max = 0, bandSum = 0, bandSigned = 0, bandMax = 0, band = 0, off = 0;
   for (let i = 0; i < a.length; i++) {
-    const e = Math.abs(a[i] - b[i]);
+    const d = a[i] - b[i], e = Math.abs(d);
     sum += e;
     if (e > max) max = e;
+    if (mask[i] > 0 && mask[i] < 1) {
+      bandSum += e;
+      bandSigned += d;
+      if (e > bandMax) bandMax = e;
+      band++;
+    }
+    if (Math.abs(code(a[i]) - code(b[i])) > 1) off++;
   }
-  return { mean: sum / a.length, max };
+  return {
+    mean: sum / a.length,
+    max,
+    off,
+    band,
+    bandMean: band ? bandSum / band : 0,
+    bandSum,
+    bandMax,
+    bias: band ? bandSigned / band : 0,
+  };
 }
 
 /**
- * |Δ| restricted to the anti-aliasing band — the pixels where `truth` is strictly between empty and full.
- *
- * This is the number to report. A whole-image mean is not comparable across render sizes: the error lives on
- * edges, edge pixels grow with the perimeter (∝ size) while the divisor grows with the area (∝ size²), so the
- * mean falls ~1/size for reasons that have nothing to do with a renderer's quality — doubling the size makes
- * every engine look twice as good. Averaged over the band instead, the same renderer scores the same at
- * 128px and at 2048px, so the figure is a property of the algorithm rather than of the frame it was drawn in.
+ * The band figures alone, under the names tools/comparison.js, tools/report.js and tools/diff.js use. Those
+ * three are one workflow whose output is quoted directly, so they keep their own vocabulary; this is a view
+ * over the single pass above, not a second implementation.
  */
 export function edgeStats(cov, truth, mask = truth) {
-  let n = 0, sum = 0, max = 0, signed = 0;
-  for (let i = 0; i < cov.length; i++) {
-    if (mask[i] > 0 && mask[i] < 1) {
-      const d = cov[i] - truth[i], e = Math.abs(d);
-      n++;
-      sum += e;
-      signed += d;
-      if (e > max) max = e;
-    }
-  }
-  // `signed` separates a one-directional bias (a compositing or colour-space mismatch, which pushes every
-  // edge the same way) from ordinary anti-aliasing disagreement, which is close to zero-mean.
-  return { band: n, mean: n ? sum / n : 0, max, signed: n ? signed / n : 0 };
+  const s = stats(cov, truth, mask);
+  return { band: s.band, mean: s.bandMean, max: s.bandMax, signed: s.bias };
 }
+
+/** A coverage buffer as an 8-bit image would store it: the quantisation an RGBA8 readback applies. */
+export const quantize8 = (cov) => cov.map((v) => code(v) / 255);
 
 /** Per-pixel |a − b|. */
 export function absDiff(a, b) {

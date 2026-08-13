@@ -3,7 +3,7 @@
 //
 // This is the second half of a two-step workflow:
 //
-//   deno task comparison --scene <spec>     stage: scene.svg + truth/binary/windfoil/slug/chrome renders
+//   deno task comparison --scene <spec>     stage: scene.svg + truth/binary/windfoil/slug/skia renders
 //   …hand-export scene.svg from Figma / Photoshop / a browser into the same folder…
 //   deno task report --dir <that folder>    finish: <name>_diff.png for every render, crops, one table
 //

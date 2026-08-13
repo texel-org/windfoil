@@ -77,13 +77,15 @@ export async function resolveScene(spec, { font, size, offset = 0, fit = 'viewbo
 
   if (kind === 'shape') {
     const want = slugify(rest);
-    const hit = buildShapes(font).find((s) => s.label === rest || slugify(s.label) === want);
+    // Match on the label first, then on the dataset's own slug — the two differ where a label would slugify
+    // ambiguously ('a' and 'A' both give `glyph_a`), which is exactly why shapes carry an explicit slug.
+    const hit = buildShapes(font).find((s) => s.label === rest || s.slug === rest || s.slug === want);
     if (!hit) {
       throw new Error(`no shape named "${rest}" — run with --list to see them all`);
     }
     // Authored in the CELL cell; a uniform scale takes it to the render size. The comparison always FILLS,
     // so the `segments` of the stroked validate variants are ignored — they describe the same geometry.
-    return { label: hit.label, slug: slugify(hit.label),
+    return { label: hit.label, slug: hit.slug,
       quads: place(scaleQuads(hit.quads, size / CELL)), evenodd: hit.evenodd ?? false };
   }
 

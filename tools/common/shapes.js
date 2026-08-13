@@ -11,11 +11,13 @@
 // any render size, which keeps the validation numbers stable no matter what size a demo asks for.
 
 import { glyphQuads } from '../../src/font.js';
+import { slugify } from './images.js';
 
 /** The cell `buildShapes` authors its coordinates in. */
 export const CELL = 128;
 
-export const ALPHABET = 'abcdefghijklmnopqrstuvwxyz';
+/** Printable ASCII, U+0020…U+007E — the glyph range the validation suite reports its headline number over. */
+export const ASCII = Array.from({ length: 95 }, (_, i) => String.fromCharCode(0x20 + i)).join('');
 
 // ── primitives ──────────────────────────────────────────────────────────────────────────────────────────
 /** A straight segment as a quad (control point at the midpoint — exact, not an approximation). */
@@ -149,20 +151,29 @@ export function glyphShape(font, ch, cell = CELL, pad = cell * (14 / CELL)) {
   return g.quads.map((v, i) => (i % 2 === 0 ? ox + v * k : oy + v * k));
 }
 
+/** Every printable-ASCII character the font actually draws something for (space and any gap dropped). */
+export function asciiGlyphs(font, chars = ASCII) {
+  return [...chars].filter((ch) => glyphQuads(font, ch));
+}
+
 /**
  * The shape dataset, authored in the CELL×CELL cell: the synthetic stress shapes, the winding-fold failure
- * cases, then every lowercase letter of the given font. Entries are { label, quads, evenodd?, segments?,
- * fold? }:
- *   segments — the canvas reference STROKES these [x0,y0,x1,y1,w] centerlines instead of filling the quads
- *              (ours and box still fill the quads, the identical shape);
- *   fold     — a documented winding-fold limit (tools/failure.js, docs/ALGORITHM.md §4/§8): 'ours vs box'
- *              is EXPECTED to deviate here, so boots report these separately from the common shapes. The
- *              self-intersecting stars stay in the common set — their sliver deviation is shared by every
+ * cases, then the font's printable-ASCII range. Entries are { label, slug, group, quads, evenodd?, segments? }:
+ *   slug     — the filename/scene-spec form. Explicit rather than slugified from the label, because case
+ *              alone separates 'a' from 'A' and most of ASCII slugifies to nothing at all ('@', '{', '~'),
+ *              so the codepoint carries the identity.
+ *   group    — which aggregate the row pools into:
+ *              'stress' the synthetic shapes · 'glyph' the ASCII range (the headline number) ·
+ *              'fold' a documented winding-fold limit (tools/failure.js, docs/ALGORITHM.md §4/§8), where
+ *              windfoil is EXPECTED to deviate, so it is pooled separately and never quietly averaged in.
+ *              The self-intersecting stars stay in 'stress' — their sliver deviation is shared by every
  *              single-sample renderer, not a true failure.
+ *   segments — the canvas STROKES these [x0,y0,x1,y1,w] centerlines instead of filling the quads (every
+ *              other renderer still fills the quads, the mathematically identical shape).
  */
 export function buildShapes(font) {
   const hl = hairlines(), thin = spokes(64, 64, 12, 58, 24, 0.75), thick = spokes(64, 64, 14, 58, 24, 2.5);
-  return [
+  const shapes = [
     { label: 'rotated square 30°', quads: polygon(rotate([[28, 28], [100, 28], [100, 100], [28, 100]], 30)) },
     { label: 'thin diagonal sliver', quads: polygon(rotate([[12, 63.5], [116, 63.5], [116, 64.5], [12, 64.5]], 27)) },
     { label: 'hairlines 4..0.125px', quads: hl.quads }, // vertical bars, each half the width of the last
@@ -175,19 +186,25 @@ export function buildShapes(font) {
     { label: 'star {5/2} nonzero', quads: polygon(starPts(64, 64, 52, 5, 2)) }, // self-intersecting → winding 2 core
     { label: 'star {5/2} even-odd', quads: polygon(starPts(64, 64, 52, 5, 2)), evenodd: true }, // hollow core
     // winding-fold failure mechanisms, straight from tools/failure.js (same coordinates):
-    { label: 'fold A ±1 cancellation', fold: true, // +1 half abuts −1 half: true 1, fold 0 → black seam
+    { label: 'fold A ±1 cancellation', group: 'fold', // +1 half abuts −1 half: true 1, fold 0 → black seam
       quads: [...rect(16, 16, 64.5, 112, +1), ...rect(64.5, 16, 112, 112, -1)] },
-    { label: 'fold B winding ×2', fold: true, // doubled contour → +2: edge AA saturates, edge fattens ~½px
+    { label: 'fold B winding ×2', group: 'fold', // doubled contour → +2: edge AA saturates, edge fattens ~½px
       quads: [...rect(16, 16, 64.5, 112, +1), ...rect(16, 16, 64.5, 112, +1)] },
-    { label: 'fold C overlap {0,1,2}', fold: true, // overlap corner sees three winding levels → over-counts
+    { label: 'fold C overlap {0,1,2}', group: 'fold', // overlap corner sees three winding levels → over-counts
       quads: [...rect(16, 16, 80.5, 112, +1), ...rect(48, 40.5, 128, 88.5, +1)] },
-    { label: 'fold D even-odd halo', fold: true, evenodd: true, // doubled contour: empty interior, false halo
+    { label: 'fold D even-odd halo', group: 'fold', evenodd: true, // doubled contour: empty interior, false halo
       quads: [...rect(24.5, 24.5, 96.5, 96.5, +1), ...rect(24.5, 24.5, 96.5, 96.5, +1)] },
-    { label: 'fold E1 w=1 (control)', fold: true, // same averaged winding as E2, different true coverage:
+    { label: 'fold E1 w=1 (control)', group: 'fold', // same averaged winding as E2, different true coverage:
       quads: rect(16, 16, 64.5, 112, +1) }, // single edge at 50% of the column — the fold is exact here…
-    { label: 'fold E2 w=2 doubled', fold: true, // …and 2× too high here; ours renders E1 and E2 identically
+    { label: 'fold E2 w=2 doubled', group: 'fold', // …and 2× too high here; ours renders E1 and E2 identically
       quads: [...rect(16, 16, 64.25, 112, +1), ...rect(16, 16, 64.25, 112, +1)] },
-    { label: 'fold F minified fence', fold: true, quads: fence() }, // ±1 bars: true ≈ 1, fold fades to black
-    ...[...ALPHABET].map((ch) => ({ label: `glyph '${ch}'`, quads: glyphShape(font, ch) })),
+    { label: 'fold F minified fence', group: 'fold', quads: fence() }, // ±1 bars: true ≈ 1, fold fades to black
+    ...asciiGlyphs(font).map((ch) => ({
+      label: `glyph '${ch}'`,
+      slug: `glyph_${slugify(ch) ? `${slugify(ch)}_` : ''}u${ch.codePointAt(0).toString(16).padStart(4, '0')}`,
+      group: 'glyph',
+      quads: glyphShape(font, ch),
+    })),
   ];
+  return shapes.map((s) => ({ group: 'stress', slug: slugify(s.label), ...s }));
 }

@@ -125,48 +125,81 @@ shader override sidesteps the fold for offline renders by point-sampling the tru
 
 ## 5. Numerical validation
 
-`deno task validate` compares the shader's coverage against independent references: **box**, a box filter
-from a zero-AA point sample (fraction of a 24×24 sub-sample grid inside the shape, decided by ray-casting the
-raw curves — a different code path from the area integral), **skia**
-([@napi-rs/canvas](https://www.npmjs.com/package/@napi-rs/canvas)), and **slug** (the benchmark's verified
-Slug port, [`../bench/slug.wgsl`](../bench/slug.wgsl) — the other analytic AA model, and like ours a scalar
-per-pixel estimate, so it shares the winding-fold deviations that Skia's coverage rasterizer resolves). The
-suite is the synthetic stress shapes,
-the winding-fold failure cases from `tools/failure.js` (marked `†` and reported separately — deviation there
-is the documented §4/§8 limit, not error), plus every lowercase letter a–z of the bundled font. Mean /
-worst-pixel `|Δcoverage|` on this machine (representative rows):
+`deno task validate` reports one figure per renderer: **mean |Δ| from ground truth**, over a corpus, where
+ground truth is the box filter itself — estimated by point-sampling a 384×384 grid per pixel and deciding
+each sample in/out by ray-casting the raw curves. No AA model, and a different code path from the area
+integral, so it is an independent reference rather than a self-comparison. The corpus is the printable-ASCII
+range of the bundled font plus the synthetic stress shapes; the renderers are **windfoil**, **slug** (the
+benchmark's verified Slug port, [`../bench/slug.wgsl`](../bench/slug.wgsl) — the other analytic AA model, and
+like ours a scalar per-pixel estimate) and **skia**
+([@napi-rs/canvas](https://www.npmjs.com/package/@napi-rs/canvas), i.e. Skia). On this machine:
 
 ```
-shape                    ours vs box       skia vs box       slug vs box
-                         mean      max     mean      max     mean      max
-rotated square 30°       0.00003   0.004   0.00079   0.092   0.00069   0.073
-circle r=44 (64 arcs)    0.00003   0.006   0.00073   0.177   0.00036   0.060
-glyph 'o'                0.00006   0.014   0.00231   0.340   0.00079   0.090
-star {5/2} even-odd      0.00017   0.100   0.00111   0.090   0.00094   0.093
-common shapes (37)       0.00012   0.100   0.00163   0.360   0.00106   0.324
+dataset · 105 shapes: 94 printable-ASCII glyphs + 11 synthetic stress shapes
+           1,720,320 pixels (128×128 per shape)
+
+renderer   mean |Δ| from ground truth
+windfoil           0.000036
+slug               0.000688
+skia               0.001312
 ```
+
+The figure is the mean over **every pixel** of a fixed 128×128 cell. Restricting it to the anti-aliased band
+— the pixels the truth puts strictly between empty and full — is tempting, since that is where the error
+usually is and since a band mean is the only form comparable _across render sizes_ (edge pixels grow with the
+perimeter, ∝ size, while a whole-image mean divides by the area, ∝ size², so it falls ~1/size). But a band
+mean can only see errors that land on an edge, and a renderer's worst failures are often the ones that do
+not: a hole that fills in, a stray blob, interior winding that fades out. The fold cases below are exactly
+that shape — 431 band pixels, yet 8,322 pixels more than one code value out — so a band mean misses ~99% of
+what goes wrong there. Nothing in this suite varies the render size, so the whole-image mean costs nothing
+and hides nothing. (`--full` and `stats.json` carry the band mean alongside it;
+[`../tools/comparison.js`](../tools/comparison.js), which does vary size, leads with the band figure.)
+
+The seven winding-fold cases from `tools/failure.js` are measured but pooled apart, because they are
+adversarial by construction (§4/§8) — averaged in, a handful of hand-made pathologies would set most of a
+number meant to describe ordinary drawing. There: windfoil 0.059935, slug 0.059945, skia 0.000007. That gap
+is the documented fold limit, and it is the one place where a full coverage rasterizer is the more correct
+renderer.
+
+**What the number is measured against.** `deno task validate --full` prints the corpus shape by shape and adds
+three **control rows**, measured in the same columns by the same code
+([`../tools/common/renderers.js`](../tools/common/renderers.js)) — they run on every invocation whether or not
+they are printed, and the default output refuses to quote the figure if the first one fails:
+
+| control   | what it is                            | what it answers                                                |
+| --------- | ------------------------------------- | -------------------------------------------------------------- |
+| `truth/2` | the same reference at half the grid   | has the reference converged, or is it reporting its own noise?  |
+| `8-bit`   | truth through the same 8-bit readback | what does a _perfect_ renderer score here?                      |
+| `binary`  | one sample at the pixel centre, no AA | what is the scale of the thing being measured?                  |
+
+They put the figure in its place. windfoil's 3.6e-5 sits on the `8-bit` row's 3.2e-5 — the score the exact
+box filter _itself_ gets once quantised the way the readback quantises every renderer — and all but twelve
+pixels of the corpus land within one code value of the reference. So at the precision the output has, this
+cannot separate windfoil from the ideal box filter: it certifies that any remaining gap is under the 8-bit
+quantum, **not** that it is zero. The reference earns that standing in the same table — halving its grid moves
+no pixel by more than one code value, and 384 is the smallest grid for which that holds here (at 192 it leaves
+~800 such pixels). The twelve exceptions are both `star {5/2}` rows: the winding fold meeting a sub-pixel
+self-intersection, the same mechanism the † cases isolate. `deno task validate --exact` renders those through
+the `EXACT_MODE` override instead of the fold, and it agrees with the reference to the same 8-bit floor.
+
+`--full` also carries a signed **bias** column — mean (renderer − truth) over the band — which separates a
+directional error from ordinary disagreement. windfoil's +1.1e-5 against a 1.10e-3 spread means its edges do
+not sit systematically light or dark. Skia's −6.6e-3 is ~16% of its spread and one-directional: against this
+target its edges read consistently darker, a difference of AA model rather than noise. A large bias on a
+_hand-exported_ render usually means something else entirely — blending in linear light and encoding to sRGB
+puts 50% coverage at 188/255 instead of 128/255 — and `deno task report` warns when one approaches its spread.
+
+**On slug and skia.** They are measured against the same target, which is not the same as ranking fidelity:
+each aims at its own reconstruction of a covered pixel. Skia flattens curves to line segments (its circle
+deviation shrinks as arc count rises; the test uses 64 arcs) and its edge AA is its own model. Slug is exact
+on axis-aligned edges and analytic in curvature, but its point-sampled dual rays bead on sub-pixel strokes
+(the 0.75px spoke wheel is its worst stress row), and it reproduces the fold deviations almost exactly
+alongside ours — those limits belong to scalar per-pixel coverage estimation as a class.
 
 The same harness ([`../tools/validate/harness.js`](../tools/validate/harness.js)) also runs in a browser
 against the browser's _own_ canvas2d rasterizer (Skia in Chrome, CoreGraphics in Safari, WebRender in
 Firefox): `deno task serve`, then open <http://localhost:8080/tools/validate/>. Only the boots differ — Deno
-supplies @napi-rs/canvas and writes PNGs; the browser supplies its canvas and streams the panels into the
-page.
-
-**On the deltas and exactness.** The non-zero numbers above are the reference and the readback, not the
-algorithm's error: `box` is a 24×24 point sample (its own ~1/F noise means no exact method scores 0 against it),
-and renders are compared at 8-bit. Against an _exact_ analytic box filter instead, the rotated square agrees to a
-mean of 2.5×10⁻⁵ and never more than one code value per pixel — the shader reproduces the box filter exactly, up
-to 8-bit and f32 rounding. The one real deviation is the winding fold (§4), which the `star {5/2}` maxes measure.
-
-On ordinary fills the shader matches the point-sampled box filter to within its own sampling noise
-(max ≲ 0.02). Skia sits further off because it flattens curves to line segments (its circle deviation shrinks
-as arc count rises; the test uses 64 arcs) and its edge AA is its own model. Slug lands between the two
-(common-shape mean 0.00106): like ours it is exact on axis-aligned edges and handles curvature analytically,
-but its point-sampled dual rays bead on sub-pixel strokes (the 0.75px spoke wheel is its worst common row),
-and it reproduces the † fold deviations almost exactly alongside ours — those limits belong to scalar
-per-pixel coverage estimation as a class, which Skia's full coverage rasterizer resolves. The
-self-intersecting star is the documented §4 limit: the winding fold deviates by ~0.1 at the crossings,
-comparable to Skia there.
+supplies @napi-rs/canvas and writes PNGs; the browser supplies its canvas and streams the panels into the page.
 
 ---
 

@@ -20,8 +20,14 @@ Requires [Deno](https://deno.com/) 2.x on a machine with a WebGPU-capable GPU.
 # renders a PNG in output/
 deno task render
 
-# compare against point-sampled box filter, Skia, and Slug (synthetic shapes + glyphs a–z)
+# one number per renderer: mean |Δ| from the point-sampled box filter, over the printable-ASCII
+# range of the bundled font plus the synthetic stress shapes  (--full for the breakdown)
 deno task validate
+
+# the same renderers over ONE scene, large: stage the PNGs + scene.svg, then measure the
+# folder (hand-export scene.svg from Figma/a browser into it first to include that engine)
+deno task comparison --scene glyph:G --size 512
+deno task report --dir output/comparison/glyph_g_u0047
 
 # serve the demo, then open http://localhost:8080/
 # (or http://localhost:8080/tools/validate/ to run the validation suite against
