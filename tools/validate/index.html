@@ -28,7 +28,9 @@
       }
       #params { margin-bottom: 4px; }
       #status { margin-bottom: 16px; }
-      /* The stats table mirrors the Deno console table: shape · ours-vs-box · canvas-vs-box (mean, max). */
+      /* The stats table mirrors the Deno console table: one column pair (mean, max) per renderer on trial,
+         then one aggregate block per shape group, controls included. Both are built from the shared renderer
+         list (tools/common/renderers.js), so neither is written out here. */
       table {
         border-collapse: collapse;
         background: #fff;
@@ -41,8 +43,16 @@
       }
       th { font-weight: 700; }
       th:first-child, td:first-child { text-align: left; }
-      /* † rows: the winding-fold limit cases — 'ours vs box' deviation there is documented, not a bug. */
+      /* † rows: the winding-fold limit cases — windfoil's deviation there is documented, not a bug. */
       tr.fold td { color: rgba(0, 0, 0, 0.55); }
+      /* Control rows calibrate the table rather than being judged by it (see tools/common/renderers.js). */
+      tr.control td { color: rgba(0, 0, 0, 0.55); font-style: italic; }
+      .aggregates { margin-top: 24px; }
+      .aggregates h2 {
+        font-size: 13px;
+        font-weight: 700;
+        margin: 16px 0 4px;
+      }
       /* One panel per shape: the three coverage views + the three amplified error maps. */
       .panel { margin-top: 20px; }
       .panel h2 {
@@ -84,23 +94,9 @@
     <div id="params">…</div>
     <div id="status">booting…</div>
 
+    <!-- The header is built from the renderer list at boot, so adding a renderer adds its columns here. -->
     <table id="stats">
-      <thead>
-        <tr>
-          <th rowspan="2">shape</th>
-          <th colspan="2">ours vs box</th>
-          <th colspan="2">canvas vs box</th>
-          <th colspan="2">slug vs box</th>
-        </tr>
-        <tr>
-          <th>mean</th>
-          <th>max</th>
-          <th>mean</th>
-          <th>max</th>
-          <th>mean</th>
-          <th>max</th>
-        </tr>
-      </thead>
+      <thead></thead>
       <tbody></tbody>
     </table>
 

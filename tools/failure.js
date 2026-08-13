@@ -29,7 +29,11 @@ import { polygon, rect, starPts } from './common/shapes.js';
 import { svgDocument } from './common/svg.js';
 
 const S = 128; // cell size in px (whole-shape render)
-const F = 24; // point-sample grid per pixel for the box-filter ground truth
+// Point-sample grid per pixel for the box-filter ground truth. Deliberately coarser than the validation
+// suite's (tools/validate/harness.js pins 384, the grid at which halving no longer moves a pixel by an 8-bit
+// code value): the deviations this tool exhibits run from 0.1 to a full 1.0, three orders of magnitude above
+// anything the sample grid contributes, so sharpening the reference here would only cost time.
+const F = 24;
 
 // The three coverage sources are the shared ones (tools/common/coverage.js) — the same code validate.js and
 // comparison.js measure with, so a number printed here is directly comparable to one printed there. These
