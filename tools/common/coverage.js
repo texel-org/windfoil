@@ -258,6 +258,31 @@ export function stats(a, b) {
   return { mean: sum / a.length, max };
 }
 
+/**
+ * |Δ| restricted to the anti-aliasing band — the pixels where `truth` is strictly between empty and full.
+ *
+ * This is the number to report. A whole-image mean is not comparable across render sizes: the error lives on
+ * edges, edge pixels grow with the perimeter (∝ size) while the divisor grows with the area (∝ size²), so the
+ * mean falls ~1/size for reasons that have nothing to do with a renderer's quality — doubling the size makes
+ * every engine look twice as good. Averaged over the band instead, the same renderer scores the same at
+ * 128px and at 2048px, so the figure is a property of the algorithm rather than of the frame it was drawn in.
+ */
+export function edgeStats(cov, truth, mask = truth) {
+  let n = 0, sum = 0, max = 0, signed = 0;
+  for (let i = 0; i < cov.length; i++) {
+    if (mask[i] > 0 && mask[i] < 1) {
+      const d = cov[i] - truth[i], e = Math.abs(d);
+      n++;
+      sum += e;
+      signed += d;
+      if (e > max) max = e;
+    }
+  }
+  // `signed` separates a one-directional bias (a compositing or colour-space mismatch, which pushes every
+  // edge the same way) from ordinary anti-aliasing disagreement, which is close to zero-mean.
+  return { band: n, mean: n ? sum / n : 0, max, signed: n ? signed / n : 0 };
+}
+
 /** Per-pixel |a − b|. */
 export function absDiff(a, b) {
   const d = new Float64Array(a.length);

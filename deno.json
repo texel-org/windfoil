@@ -3,6 +3,7 @@
     "render": "deno run --unstable-webgpu -A src/main.js",
     "validate": "deno run --unstable-webgpu -A tools/validate.js",
     "comparison": "deno run --unstable-webgpu -A tools/comparison.js",
+    "report": "deno run -A tools/report.js",
     "diff": "deno run -A tools/diff.js",
     "crop": "deno run -A tools/crop.js",
     "failure": "deno run --unstable-webgpu -A tools/failure.js",

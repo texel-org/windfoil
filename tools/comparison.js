@@ -2,8 +2,19 @@
 //
 // The validation suite (tools/validate.js) answers "how close is windfoil to the exact box filter, over a
 // whole dataset, in numbers". This answers the other question: what does ONE shape actually look like out of
-// each rasteriser, big enough to see. Same scene, same geometry, same output format — five renders and, for
-// each of them, the error map against the ideal:
+// each rasteriser, big enough to see.
+//
+// It is the STAGING half of a two-step workflow. It renders, and stops:
+//
+//   deno task comparison --scene <spec>     → scene.svg + one PNG per renderer, here
+//   …hand-export scene.svg from Figma / Photoshop / a browser into the same folder…
+//   deno task report --dir <that folder>    → error maps, crops, and one table over everything present
+//
+// Error maps are deliberately NOT written here. A renderer this repo cannot drive can only join the
+// comparison as a file dropped in afterwards, so deltas belong in the second step where every render —
+// driven or hand-exported — is measured in one pass at one gain.
+//
+// The five renders, same scene, same geometry, same output format:
 //
 //   truth     the box filter — a pixel's coverage IS the fraction of its area inside the shape — estimated
 //             by point-sampling an N×N grid per pixel (--samples, default 64 ⇒ 4096 samples/px) with winding
@@ -27,7 +38,7 @@
 //   deno task comparison --list                                     # every scene name
 //
 // Flags: --scene <spec> (default glyph:G, see common/scenes.js) · --size <px> (512) · --samples <n> (64)
-//        --amp <n> (15) · --offset <px> (0) · --exact · --list
+//        --offset <px> (0) · --exact · --list   (error-map gain lives on `deno task report`)
 //        --fit viewbox|ink  svg scenes only: fit the file's viewBox (default) or its ink bbox
 //        --out <name>  the folder under output/comparison/ to write into (default: the scene's slug)
 
@@ -35,8 +46,15 @@ import { loadFont } from '../src/font.js';
 import { requestDevice } from '../src/gpu.js';
 import { encodePNG } from '../src/png.js';
 import { createCanvas } from '@napi-rs/canvas';
-import { canvasCoverage, pointCoverage, slugCoverage, stats, windfoilCoverage } from './common/coverage.js';
-import { AMP, diffRGBA, grayRGBA, WHITE } from './common/images.js';
+import {
+  canvasCoverage,
+  edgeStats,
+  pointCoverage,
+  slugCoverage,
+  stats,
+  windfoilCoverage,
+} from './common/coverage.js';
+import { grayRGBA } from './common/images.js';
 import { svgDocument } from './common/svg.js';
 import { listScenes, resolveScene } from './common/scenes.js';
 import { args } from './common/args.js';
@@ -44,7 +62,6 @@ import { args } from './common/args.js';
 const argv = args(Deno.args);
 const size = argv.number('size', 512); // square render size, in px, shared by every renderer
 const samples = argv.number('samples', 64); // ground-truth sub-sample grid: samples² points per pixel
-const amp = argv.number('amp', AMP); // error-map gain (--amp 1 for the true, unamplified |Δ|)
 const offset = argv.number('offset', 0); // sub-pixel phase of the scene against the grid (see scenes.js)
 const exact = argv.has('exact'); // render windfoil with the shader's EXACT_MODE override
 const spec = argv.string('scene', 'glyph:G');
@@ -68,7 +85,7 @@ const createContext2D = (w, h) => createCanvas(w, h).getContext('2d');
 const RENDERERS = [
   {
     name: 'truth',
-    title: `ideal box filter, ${samples}×${samples} point-sampled`,
+    title: `ideal box filter, ${samples}² samples/px`,
     reference: true, // what every other renderer's error map is measured against
     run: () => pointCoverage(quads, { ...common, samples }),
   },
@@ -88,7 +105,7 @@ const RENDERERS = [
 
 console.log(
   `comparison · ${label} · ${size}×${size} · truth = ${samples}×${samples} point-sampled box filter` +
-    ` · error maps ×${amp}${offset ? ` · offset ${offset}px` : ''}\n`,
+    `${offset ? ` · offset ${offset}px` : ''}\n`,
 );
 
 const outDir = new URL(`../output/comparison/${argv.string('out', scene.slug)}/`, import.meta.url);
@@ -119,11 +136,12 @@ for (const r of RENDERERS) {
 const truth = results.find((r) => r.reference).cov;
 for (const r of results) {
   r.stats = r.reference ? null : stats(r.cov, truth);
+  r.edge = r.reference ? null : edgeStats(r.cov, truth);
   writePNG(r.name, grayRGBA(r.cov));
-  // |renderer − truth|: black where they agree, white where they don't. Amplified ×amp, because a renderer
-  // that tracks the box filter differs by a few percent at most — at gain 1 its map reads as solid black.
-  if (!r.reference) writePNG(`${r.name}_diff`, diffRGBA(r.cov, truth, amp, WHITE));
 }
+// Error maps are NOT written here. They belong to `deno task report`, which runs over this folder after any
+// hand-exported renders (Figma, Photoshop, a browser) have been dropped in — so every delta in the scene is
+// produced by one pass with one gain, instead of some in-process now and the rest from disk later.
 
 // stats.json: the same numbers, machine-readable, so a sheet/report can be built over many runs without
 // re-rendering or scraping stdout.
@@ -135,7 +153,6 @@ write(
     slug: scene.slug,
     size,
     samples,
-    amp,
     offset,
     exact,
     quads: quads.length / 6,
@@ -143,7 +160,10 @@ write(
       name: r.name,
       title: r.title,
       reference: !!r.reference,
-      mean: r.stats?.mean ?? null,
+      edgeMean: r.edge?.mean ?? null, // mean |Δ| over the AA band — the size-independent figure
+      edgeMax: r.edge?.max ?? null,
+      band: r.edge?.band ?? null,
+      mean: r.stats?.mean ?? null, // whole-image, diluted by background; falls ~1/size
       max: r.stats?.max ?? null,
       ms: +r.ms.toFixed(1),
     })),
@@ -151,20 +171,30 @@ write(
 );
 
 const col = (s, n) => String(s).padStart(n);
-console.log(`${'renderer'.padEnd(10)} ${'source'.padEnd(38)} ${col('mean |Δ|', 10)} ${col('max |Δ|', 9)} ${col('ms', 8)}`);
+console.log(
+  `${'renderer'.padEnd(10)} ${'source'.padEnd(34)} ${col('per-AA-px', 10)} ${col('mean', 9)} ` +
+    `${col('max', 9)} ${col('ms', 7)}`,
+);
 for (const r of results) {
   console.log(
-    `${r.name.padEnd(10)} ${r.title.padEnd(38)} ` +
-      `${col(r.stats ? r.stats.mean.toFixed(6) : '—', 10)} ${col(r.stats ? r.stats.max.toFixed(6) : '—', 9)} ` +
-      `${col(r.ms.toFixed(0), 8)}`,
+    `${r.name.padEnd(10)} ${r.title.padEnd(34)} ` +
+      `${col(r.edge ? r.edge.mean.toFixed(6) : '—', 10)} ${col(r.stats ? r.stats.mean.toFixed(6) : '—', 9)} ` +
+      `${col(r.stats ? r.stats.max.toFixed(6) : '—', 9)} ${col(r.ms.toFixed(0), 7)}`,
   );
 }
+console.log(
+  `\nper-AA-px = mean |Δ| over the ${results.find((r) => r.edge)?.edge.band ?? 0} pixels the truth puts strictly ` +
+    `between empty and full.\n` +
+    `  It is the size-independent figure: 'mean' is diluted by the empty background, so it falls ~1/size and\n` +
+    `  is not comparable between render sizes.`,
+);
 
 console.log(
-  `\nwrote ${results.length * 2 - 1} PNGs + scene.svg + stats.json to ${Deno.realPathSync(outDir)}` +
-    `\n  <renderer>.png       coverage, white = covered` +
-    `\n  <renderer>_diff.png  |<renderer> − truth| ×${amp}, white = mismatch (there is no truth_diff — it IS the truth)` +
-    `\n  scene.svg            the same geometry as a path; render it (Figma, a browser) and diff it against truth.png` +
-    `\n\nmean/max |Δ| are against truth, on the raw coverage — unamplified, so they read the same at any --amp.` +
-    `\nThe box filter's own point-sample noise is ~1/${samples}, which floors what any renderer can score here.`,
+  `\nstaged ${results.length} PNGs + scene.svg + stats.json in ${Deno.realPathSync(outDir)}` +
+    `\n  <renderer>.png   coverage, white = covered` +
+    `\n  scene.svg        the same geometry as a path — hand-render it (Figma, Photoshop, a browser) at` +
+    `\n                   ${size}×${size} and save the PNG into this folder to include it` +
+    `\n\nnext:  deno task report --dir ${outDir.pathname.replace(`${Deno.cwd()}/`, '')}` +
+    `\n       writes an error map for every render against truth, the crops, and one table.` +
+    `\n\nThe box filter's own point-sample noise is ~1/${samples}, which floors what any renderer can score here.`,
 );
